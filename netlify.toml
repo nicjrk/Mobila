@@ -1,0 +1,7 @@
+[build]
+  command = "bun run build"
+  publish = ".output/public"
+
+# Optional: ensure Netlify runs the right install/build environment
+[build.environment]
+  NODE_VERSION = "18"
