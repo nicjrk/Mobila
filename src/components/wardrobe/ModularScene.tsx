@@ -1,5 +1,5 @@
 import { Canvas, useFrame, useThree, type ThreeEvent } from "@react-three/fiber";
-import { ContactShadows, Grid, Html, Line, TransformControls } from "@react-three/drei";
+import { ContactShadows, Environment, Grid, Html, Line, TransformControls } from "@react-three/drei";
 import { lazy, memo, Suspense, useEffect, useMemo, useRef, useState } from "react";
 import * as THREE from "three";
 import type { FocusRequest } from "./CameraRig";
@@ -17,7 +17,7 @@ import {
   type ModularRoom,
   type Unit,
 } from "@/lib/wardrobe";
-import { snapElevation, snapUnitToRoom } from "@/lib/units";
+import { footprintSize, snapElevation, snapUnitToRoom } from "@/lib/units";
 import {
   drawerStackHeight,
   FITTING_META,
@@ -1360,10 +1360,26 @@ export default function ModularScene({
   }, [selectedId, units.length, interior.editInterior, fitDrag, handleDrag]);
 
   // Frame the whole assembly: widest extent left↔right plus a comfortable margin.
-  const span = Math.max(
-    room.width / 100,
-    units.reduce((s, u) => Math.max(s, Math.abs(u.x / 100) + u.w / 200), 0.9) * 2.6,
-  );
+  const contentBounds = useMemo(() => {
+    if (!units.length) return { minX: -1.2, maxX: 1.2, minZ: 0, maxZ: 2.4 };
+    return units.reduce(
+      (bounds, unit) => {
+        const footprint = footprintSize(unit);
+        return {
+          minX: Math.min(bounds.minX, unit.x / 100 - footprint.width / 200),
+          maxX: Math.max(bounds.maxX, unit.x / 100 + footprint.width / 200),
+          minZ: Math.min(bounds.minZ, unit.z / 100 - footprint.depth / 200),
+          maxZ: Math.max(bounds.maxZ, unit.z / 100 + footprint.depth / 200),
+        };
+      },
+      { minX: Infinity, maxX: -Infinity, minZ: Infinity, maxZ: -Infinity },
+    );
+  }, [units]);
+  const contentWidth = contentBounds.maxX - contentBounds.minX;
+  const contentDepth = contentBounds.maxZ - contentBounds.minZ;
+  const contentCentreX = (contentBounds.minX + contentBounds.maxX) / 2;
+  const contentCentreZ = (contentBounds.minZ + contentBounds.maxZ) / 2;
+  const span = Math.max(2.8, contentWidth, contentDepth * 1.15);
   const tallest = Math.max(room.height / 100, ...units.map((u) => (u.y ?? 0) / 100 + u.h / 100));
 
   const startDrag = (u: Unit) => (e: ThreeEvent<PointerEvent>) => {
@@ -1437,7 +1453,10 @@ export default function ModularScene({
     <Canvas
       shadows={!isMobile}
       dpr={isMobile ? [1, 1.35] : [1, 1.75]}
-      camera={{ position: [span * 0.75, tallest * 1.25 + 1.05, 3.5 + span * 1.35], fov: 48 }}
+      camera={{
+        position: [contentCentreX + span * 0.72, tallest * 0.82 + 0.7, contentCentreZ + span * 1.2],
+        fov: 42,
+      }}
       onPointerMissed={() => {
         setArmedUnitId(null);
         onSelect(null);
@@ -1448,6 +1467,7 @@ export default function ModularScene({
       <fog attach="fog" args={["#f7f4ef", 12, 36]} />
       <ambientLight intensity={0.55} />
       <hemisphereLight args={["#fff4e0", "#e6e0d6", 0.5]} />
+      <Environment preset="apartment" />
       <directionalLight
         position={[3.2, 5.2, 3.4]}
         intensity={2.1}
@@ -1574,7 +1594,7 @@ export default function ModularScene({
           focus={focus}
           minDistance={1.4}
           maxDistance={20}
-          target={[0, tallest * 0.4 - 0.9, 0]}
+          target={[contentCentreX, tallest * 0.42 - 0.9, contentCentreZ]}
         />
       </Suspense>
     </Canvas>

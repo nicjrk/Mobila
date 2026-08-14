@@ -102,15 +102,21 @@ export default function InteriorEquipment({
                 selectedId === i.id ? "bg-accent ring-1 ring-primary" : "bg-secondary"
               }`}
             >
-              <button className="flex-1 text-left text-foreground" onClick={() => onSelect?.(i.id)}>
+              <button
+                type="button"
+                className="min-w-0 flex-1 truncate text-left text-foreground"
+                onClick={() => onSelect?.(i.id)}
+              >
                 {itemName(i.type)} · {Math.round(i.y * 10) / 10} cm
               </button>
-              <div className="flex items-center gap-1">
+              <div className="flex shrink-0 flex-wrap items-center justify-end gap-1">
                 {actions?.(i)}
                 <button
+                  type="button"
                   aria-label="Remove item"
+                  title="Delete item"
                   onClick={() => onRemove(i.id)}
-                  className="text-muted-foreground transition-colors hover:text-destructive"
+                  className="flex size-7 shrink-0 items-center justify-center rounded-md border border-border bg-background text-muted-foreground transition-colors hover:border-destructive hover:bg-destructive/10 hover:text-destructive"
                 >
                   <Trash2 className="size-3.5" />
                 </button>
