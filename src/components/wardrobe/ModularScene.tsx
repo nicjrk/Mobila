@@ -32,6 +32,7 @@ import {
   DoorClosed,
   Lock,
   Magnet,
+  Move3d,
   MoveVertical,
   RotateCw,
   Trash2,
@@ -472,16 +473,21 @@ function UnitToolbar({
   unit,
   actions,
   interior,
+  onEnableMove,
 }: {
   unit: Unit;
   actions: Actions;
   interior: Interior;
+  onEnableMove: () => void;
 }) {
   const btn =
     "flex size-7 items-center justify-center rounded-lg border border-border/70 bg-card/90 text-muted-foreground shadow-sm transition-colors hover:bg-secondary hover:text-foreground";
   return (
     <Html center position={[0, (unit.y + unit.h) / 100 + 0.22, 0]} distanceFactor={5}>
       <div className="flex items-center gap-1 rounded-xl border border-border/70 bg-card/85 p-1 shadow-md backdrop-blur-md">
+        <button className={`${btn} text-primary`} title="Move unit" onClick={onEnableMove}>
+          <Move3d className="size-3.5" />
+        </button>
         <button
           className={`${btn} ${interior.editInterior ? "border-primary text-primary" : ""}`}
           title={
@@ -557,6 +563,7 @@ const UnitMesh = memo(function UnitMesh({
   groupRef,
   onSelect,
   onDragStart,
+  onEnableMove,
   actions,
   interior,
   onFittingDown,
@@ -575,6 +582,7 @@ const UnitMesh = memo(function UnitMesh({
   groupRef: (g: THREE.Group | null) => void;
   onSelect: (additive?: boolean) => void;
   onDragStart: (e: ThreeEvent<PointerEvent>) => void;
+  onEnableMove: () => void;
   actions: Actions;
   interior: Interior;
   onFittingDown: (unit: Unit, f: Fitting, e: ThreeEvent<PointerEvent>) => void;
@@ -697,7 +705,11 @@ const UnitMesh = memo(function UnitMesh({
             onSelect(true);
             return;
           }
-          if (movable && !interior.editInterior) onDragStart(e);
+          if (!movable) {
+            onSelect();
+            return;
+          }
+          if (!interior.editInterior) onDragStart(e);
         }}
         onContextMenu={(e) => {
           e.stopPropagation();
@@ -723,6 +735,14 @@ const UnitMesh = memo(function UnitMesh({
             </span>
           </Html>
         )}
+        {selected && (
+          <UnitToolbar
+            unit={unit}
+            actions={actions}
+            interior={interior}
+            onEnableMove={onEnableMove}
+          />
+        )}
       </group>
     );
   }
@@ -740,7 +760,10 @@ const UnitMesh = memo(function UnitMesh({
           onSelect(true);
           return;
         }
-        if (!movable) return;
+        if (!movable) {
+          onSelect();
+          return;
+        }
         if (!interior.editInterior) onDragStart(e);
       }}
       onContextMenu={(e) => {
@@ -1242,6 +1265,12 @@ const UnitMesh = memo(function UnitMesh({
         })}
 
       {/* selection outline */}
+      {dragging && (
+        <mesh position={[0, H / 2, 0]} raycast={() => null}>
+          <boxGeometry args={[W + 0.04, H + 0.04, D + 0.04]} />
+          <meshBasicMaterial color="#2f80ed" transparent opacity={0.08} depthWrite={false} />
+        </mesh>
+      )}
       {(selected || dragging) && (
         <mesh position={[0, H / 2, 0]} raycast={() => null}>
           <boxGeometry args={[W + 0.02, H + 0.02, D + 0.02]} />
@@ -1253,7 +1282,14 @@ const UnitMesh = memo(function UnitMesh({
           />
         </mesh>
       )}
-      {selected && <UnitToolbar unit={unit} actions={actions} interior={interior} />}
+      {selected && (
+        <UnitToolbar
+          unit={unit}
+          actions={actions}
+          interior={interior}
+          onEnableMove={onEnableMove}
+        />
+      )}
       {showDimensions && selected && (
         <DimLine
           from={[-W / 2, 0.004, D / 2 + 0.06]}
@@ -1309,7 +1345,9 @@ export default function ModularScene({
   drawersOpen?: boolean;
   invalidUnitIds?: string[];
 }) {
-  const [drag, setDrag] = useState<{ id: string; dx: number; dz: number } | null>(null);
+  const [drag, setDrag] = useState<{ id: string; dx: number; dz: number; preview: Unit } | null>(
+    null,
+  );
   const [armedUnitId, setArmedUnitId] = useState<string | null>(null);
   const [fitDrag, setFitDrag] = useState<{ unitId: string; fittingId: string } | null>(null);
   const [handleDrag, setHandleDrag] = useState<{ unitId: string } | null>(null);
@@ -1383,7 +1421,12 @@ export default function ModularScene({
   const tallest = Math.max(room.height / 100, ...units.map((u) => (u.y ?? 0) / 100 + u.h / 100));
 
   const startDrag = (u: Unit) => (e: ThreeEvent<PointerEvent>) => {
-    setDrag({ id: u.id, dx: u.x / 100 - e.point.x, dz: u.z / 100 - e.point.z });
+    setDrag({
+      id: u.id,
+      dx: u.x / 100 - e.point.x,
+      dz: u.z / 100 - e.point.z,
+      preview: u,
+    });
   };
 
   /** Vertical drag plane in front of the assembly, used for fittings + handles. */
@@ -1496,16 +1539,24 @@ export default function ModularScene({
               z: (e.point.z + drag.dz) * 100,
             };
             const snapped = snapUnitToRoom(raw, units, room);
-            onMove(drag.id, snapped.x, snapped.z);
+            setDrag((current) => (current ? { ...current, preview: snapped } : current));
           }}
-          onPointerUp={() => setDrag(null)}
-          onPointerLeave={() => setDrag(null)}
+          onPointerUp={() => {
+            if (drag) onMove(drag.id, drag.preview.x, drag.preview.z);
+            setDrag(null);
+          }}
+          onPointerLeave={() => {
+            if (drag) onMove(drag.id, drag.preview.x, drag.preview.z);
+            setDrag(null);
+          }}
         >
           <planeGeometry args={[40, 40]} />
           <meshStandardMaterial color="#f1ede6" roughness={0.9} metalness={0.05} />
         </mesh>
 
-        {units.map((u) => (
+        {units.map((u) => {
+          const displayUnit = drag?.id === u.id ? drag.preview : u;
+          return (
           <group
             key={u.id}
             onDoubleClick={(e) => {
@@ -1515,7 +1566,7 @@ export default function ModularScene({
             }}
           >
             <UnitMesh
-              unit={u}
+              unit={displayUnit}
               selected={selectedId === u.id || selectedIds.includes(u.id)}
               dragging={drag?.id === u.id}
               groupRef={(g) => {
@@ -1523,6 +1574,7 @@ export default function ModularScene({
               }}
               onSelect={(additive) => onSelect(u.id, additive)}
               onDragStart={startDrag(u)}
+              onEnableMove={() => setArmedUnitId(u.id)}
               actions={actions}
               interior={interior}
               interactingRef={interactingRef}
@@ -1543,7 +1595,8 @@ export default function ModularScene({
               movable={armedUnitId === u.id}
             />
           </group>
-        ))}
+          );
+        })}
 
         {(fitDrag || handleDrag) && (
           <mesh

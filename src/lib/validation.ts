@@ -290,7 +290,10 @@ export function validateConfig(config: Config): ValidationIssue[] {
       const sameDepthLane = Math.abs(first.z - second.z) < (firstDepth + secondDepth) / 2 + 2;
       const gap = Math.abs(first.x - second.x) - (firstWidth + secondWidth) / 2;
       const frontNeedsClearance = first.front !== "none" || second.front !== "none";
-      if (axisAligned && sameDepthLane && gap >= 0 && gap < 8 && frontNeedsClearance) {
+      // Flush-mounted cabinets are expected to have 0 cm between carcasses.
+      // Only a small positive gap is suspicious; an actual overlap is handled
+      // separately by the unit-overlap error above.
+      if (axisAligned && sameDepthLane && gap > 0 && gap < 8 && frontNeedsClearance) {
         add({
           id: `front-clearance-${first.id}-${second.id}`,
           severity: "warning",

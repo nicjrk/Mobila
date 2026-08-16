@@ -61,13 +61,12 @@ export function snapUnit(moving: Unit, all: Unit[]): Unit {
 /** Snap a cabinet to the nearest room wall as well as neighbouring cabinets. */
 export function snapUnitToRoom(moving: Unit, all: Unit[], room: ModularRoom): Unit {
   const snapped = snapUnit(moving, all);
-  const back = footprintSize({ ...snapped, rot: 0 });
-  const side = footprintSize({ ...snapped, rot: 90 });
+  const footprint = footprintSize(snapped);
   const candidates = [
-    { axis: "z" as const, value: back.depth / 2, rot: 0 },
-    { axis: "z" as const, value: room.depth - back.depth / 2, rot: 0 },
-    { axis: "x" as const, value: -room.width / 2 + side.width / 2, rot: 90 },
-    { axis: "x" as const, value: room.width / 2 - side.width / 2, rot: 270 },
+    { axis: "z" as const, value: footprint.depth / 2 },
+    { axis: "z" as const, value: room.depth - footprint.depth / 2 },
+    { axis: "x" as const, value: -room.width / 2 + footprint.width / 2 },
+    { axis: "x" as const, value: room.width / 2 - footprint.width / 2 },
   ];
   let best = snapped;
   // New units start at z=0 while their back edge is d/2; allow that
@@ -77,7 +76,7 @@ export function snapUnitToRoom(moving: Unit, all: Unit[], room: ModularRoom): Un
     const distance = Math.abs(snapped[candidate.axis] - candidate.value);
     if (distance >= bestDistance) continue;
     bestDistance = distance;
-    best = { ...best, [candidate.axis]: candidate.value, rot: candidate.rot };
+    best = { ...best, [candidate.axis]: candidate.value };
   }
   return keepUnitInRoom(best, all, room);
 }

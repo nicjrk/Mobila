@@ -41,6 +41,19 @@ describe("modular planner core rules", () => {
     expect(valid.some((issue) => issue.id.startsWith("unit-overlap"))).toBe(false);
   });
 
+  it("allows flush-mounted cabinets without a front-clearance warning", () => {
+    const config = enterModular(defaultConfig());
+    const first = newUnit({ id: "first", x: 0, z: 30 });
+    const flush = newUnit({ id: "flush", x: 60, z: 30 });
+    const smallGap = newUnit({ id: "small-gap", x: 61, z: 30 });
+
+    const flushIssues = validateConfig({ ...config, units: [first, flush] });
+    expect(flushIssues.some((issue) => issue.id.startsWith("front-clearance"))).toBe(false);
+
+    const gapIssues = validateConfig({ ...config, units: [first, smallGap] });
+    expect(gapIssues.some((issue) => issue.id.startsWith("front-clearance"))).toBe(true);
+  });
+
   it("calculates a BOM and total for modular units", () => {
     const config = enterModular(defaultConfig());
     const units = [newUnit({ id: "one" }), newUnit({ id: "two", x: 60 })];
@@ -350,7 +363,7 @@ describe("modular planner core rules", () => {
     expect(atBack.z).toBe(30);
     const nearLeft = snapUnitToRoom({ ...cabinet, x: -385, z: 100 }, [], DEFAULT_MODULAR_ROOM);
     expect(nearLeft.x).toBe(-370);
-    expect(nearLeft.rot).toBe(90);
+    expect(nearLeft.rot).toBe(cabinet.rot);
   });
 
   it("uses rotated world dimensions when aligning and avoiding side-wall units", () => {
