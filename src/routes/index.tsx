@@ -987,6 +987,41 @@ function Planner() {
           </Button>
         ))}
       </div>
+      <div className="flex items-center gap-1 rounded-lg border border-border bg-card/90 p-1 backdrop-blur sm:hidden">
+        <Button
+          variant={viewMode === "3d" ? "secondary" : "ghost"}
+          size="sm"
+          className="h-8 px-2 text-[10px]"
+          onClick={() => setViewMode("3d")}
+        >
+          3D
+        </Button>
+        <Button
+          variant={viewMode === "2d" ? "secondary" : "ghost"}
+          size="sm"
+          className="h-8 px-2 text-[10px]"
+          onClick={() => setViewMode("2d")}
+        >
+          2D
+        </Button>
+        <Button
+          variant={viewMode === "front" ? "secondary" : "ghost"}
+          size="sm"
+          className="h-8 px-2 text-[10px]"
+          onClick={() => setViewMode("front")}
+        >
+          Front
+        </Button>
+        <Button
+          variant="ghost"
+          size="icon"
+          className={`size-8 ${showGrid ? "text-primary" : "text-muted-foreground"}`}
+          onClick={() => setShowGrid((value) => !value)}
+          aria-label={showGrid ? "Hide grid" : "Show grid"}
+        >
+          <Grid3X3 className="size-3.5" />
+        </Button>
+      </div>
       <Button
         variant="outline"
         size="icon"
@@ -1092,11 +1127,42 @@ function Planner() {
   /** Mobile: controls live in a swipeable bottom sheet. */
   const mobileSheetNode = (
     <Drawer open={mobileSheet} onOpenChange={setMobileSheet}>
-      <DrawerContent className="max-h-[85vh]">
+      <DrawerContent className="max-h-[88dvh]">
         <DrawerHeader className="pb-2">
           <DrawerTitle className="text-sm">Configurator</DrawerTitle>
         </DrawerHeader>
-        <div className="min-h-0 overflow-y-auto px-1 pb-6">
+        <div className="min-h-0 overflow-y-auto overscroll-contain px-1 pb-[calc(1.5rem+env(safe-area-inset-bottom))]">
+          <div className="mb-3 grid grid-cols-2 gap-2 px-3 sm:grid-cols-3">
+            <Button size="sm" className="h-10 gap-2" onClick={share} disabled={busy}>
+              <Link2 className="size-4" />
+              Share
+            </Button>
+            <Button
+              variant="outline"
+              size="sm"
+              className="h-10 gap-2"
+              onClick={saveProjectToLibrary}
+            >
+              <Save className="size-4" />
+              Save
+            </Button>
+            <Button variant="outline" size="sm" className="h-10 gap-2" onClick={exportPdf}>
+              <FileDown className="size-4" />
+              PDF
+            </Button>
+            <Button variant="outline" size="sm" className="h-10 gap-2" onClick={exportDesign}>
+              <FileDown className="size-4" />
+              JSON
+            </Button>
+            <Button variant="outline" size="sm" className="h-10 gap-2" onClick={exportCsv}>
+              <FileDown className="size-4" />
+              BOM CSV
+            </Button>
+            <Button variant="outline" size="sm" className="h-10 gap-2" onClick={resetDesign}>
+              <Trash2 className="size-4" />
+              Clear
+            </Button>
+          </div>
           {controlsNode}
           <RightPanel
             config={config}
@@ -1111,21 +1177,21 @@ function Planner() {
   );
 
   return (
-    <div className="flex h-screen flex-col bg-background font-sans">
+    <div className="flex h-screen min-h-[100dvh] flex-col bg-background font-sans">
       {!fullscreen && (
-        <header className="glass-bar z-20 m-3 flex shrink-0 flex-wrap items-center justify-between gap-3 rounded-2xl px-4 py-2.5 sm:px-5">
+        <header className="glass-bar z-20 m-2 flex shrink-0 items-center justify-between gap-2 rounded-2xl px-3 py-2.5 sm:m-3 sm:flex-wrap sm:gap-3 sm:px-5 sm:py-2.5">
           <div className="flex min-w-0 items-center gap-3">
             <span className="flex size-9 shrink-0 items-center justify-center rounded-lg bg-primary text-primary-foreground">
               <Boxes className="size-5" />
             </span>
             <div className="min-w-0">
-              <h1 className="truncate font-display text-lg leading-tight font-semibold text-foreground">
+              <h1 className="truncate font-display text-sm leading-tight font-semibold text-foreground sm:text-lg">
                 {isAssemblyWorkspace ? "Modular Assembly Planner" : "Custom 3D Wardrobe Planner"}
               </h1>
               <p className="text-[11px] text-muted-foreground">Configure · Visualise · Order</p>
             </div>
           </div>
-          <div className="flex flex-wrap items-center gap-2">
+          <div className="hidden flex-wrap items-center gap-2 sm:flex">
             <div className="flex items-center gap-1 rounded-lg border border-border bg-card/70 p-1">
               <Button
                 variant="ghost"
@@ -1262,12 +1328,58 @@ function Planner() {
               {saveState === "saved" ? "Auto-saved" : "Saving…"}
             </span>
           </div>
+          <div className="flex min-w-0 items-center gap-1 sm:hidden">
+            <Button
+              variant="ghost"
+              size="icon"
+              className="size-9 shrink-0"
+              disabled={!configHistory.canUndo}
+              onClick={configHistory.undo}
+              aria-label="Undo"
+            >
+              <Undo2 className="size-4" />
+            </Button>
+            <Button
+              variant="ghost"
+              size="icon"
+              className="size-9 shrink-0"
+              disabled={!configHistory.canRedo}
+              onClick={configHistory.redo}
+              aria-label="Redo"
+            >
+              <Redo2 className="size-4" />
+            </Button>
+            {isModular && (
+              <Button
+                size="icon"
+                className="size-9 shrink-0"
+                onClick={() => addCabinet("door")}
+                aria-label="Add cabinet"
+              >
+                <Plus className="size-4" />
+              </Button>
+            )}
+            <Button
+              variant="outline"
+              size="icon"
+              className="size-9 shrink-0"
+              onClick={() => setMobileSheet(true)}
+              aria-label="Open controls"
+            >
+              <SlidersHorizontal className="size-4" />
+            </Button>
+            <div className="ml-1 flex min-w-0 items-center rounded-full bg-primary px-3 py-1.5 text-primary-foreground">
+              <span className="font-display text-sm font-semibold tabular-nums">
+                €{total.toFixed(2)}
+              </span>
+            </div>
+          </div>
         </header>
       )}
 
       {fullscreen || isMobile ? (
         /* Focus view: canvas fills the screen, controls float above it. */
-        <main className="relative min-h-0 flex-1 overflow-hidden">
+        <main className="relative min-h-0 flex-1 overflow-hidden pb-[env(safe-area-inset-bottom)]">
           <div className="absolute inset-0">{sceneNode}</div>
           {!cleanPreview && presetBar}
           {viewportToolbar}
@@ -1288,7 +1400,7 @@ function Planner() {
             <>
               <Button
                 size="sm"
-                className="absolute bottom-14 left-1/2 z-20 -translate-x-1/2 gap-2 rounded-full shadow-lg"
+                className="absolute bottom-[max(3.5rem,calc(1rem+env(safe-area-inset-bottom)))] left-1/2 z-20 -translate-x-1/2 gap-2 rounded-full px-4 shadow-lg"
                 onClick={() => setMobileSheet(true)}
               >
                 <SlidersHorizontal className="size-4" />

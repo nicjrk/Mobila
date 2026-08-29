@@ -1,5 +1,12 @@
 import { Canvas, useFrame, useThree, type ThreeEvent } from "@react-three/fiber";
-import { ContactShadows, Environment, Grid, Html, Line, TransformControls } from "@react-three/drei";
+import {
+  ContactShadows,
+  Environment,
+  Grid,
+  Html,
+  Line,
+  TransformControls,
+} from "@react-three/drei";
 import { lazy, memo, Suspense, useEffect, useMemo, useRef, useState } from "react";
 import * as THREE from "three";
 import type { FocusRequest } from "./CameraRig";
@@ -1137,7 +1144,9 @@ const UnitMesh = memo(function UnitMesh({
       {unit.drawers > 0 &&
         Array.from({ length: Math.max(1, unit.drawers || 3) }, (_, i) => {
           const n = Math.max(1, unit.drawers || 3);
-          const dh = (unit.front === "drawers" ? body : drawerStack) / n - 0.006;
+          // Leave a readable shadow gap between fronts. Without it the stack
+          // reads like one flat panel, especially on smaller screens.
+          const dh = Math.max(0.04, (unit.front === "drawers" ? body : drawerStack) / n - 0.012);
           const stackHeight = unit.front === "drawers" ? body : drawerStack;
           const faceY = plinth + (i + 0.5) * (stackHeight / n);
           return (
@@ -1150,19 +1159,38 @@ const UnitMesh = memo(function UnitMesh({
             >
               {(drawersOpen || unit.drawersOpen) && (
                 <>
-                  <mesh position={[0, -dh * 0.3, -0.09]}>
+                  {/* The open drawer is a real shallow box, not just a floating slab. */}
+                  <mesh position={[0, -dh * 0.34, -D * 0.28]}>
                     <boxGeometry
-                      args={[Math.max(0.12, W - 0.05), 0.018, Math.max(0.12, D * 0.55)]}
+                      args={[Math.max(0.12, W - 0.08), 0.018, Math.max(0.16, D * 0.58)]}
                     />
                     <meshStandardMaterial map={drawerTexture} color={f.hex} roughness={0.8} />
                   </mesh>
-                  <mesh position={[-W * 0.18, -dh * 0.12, -0.02]}>
+                  <mesh position={[-W * 0.46, -dh * 0.15, -D * 0.28]}>
+                    <boxGeometry
+                      args={[0.018, Math.max(0.07, dh * 0.55), Math.max(0.16, D * 0.58)]}
+                    />
+                    <meshStandardMaterial map={drawerTexture} color={f.hex} roughness={0.8} />
+                  </mesh>
+                  <mesh position={[W * 0.46, -dh * 0.15, -D * 0.28]}>
+                    <boxGeometry
+                      args={[0.018, Math.max(0.07, dh * 0.55), Math.max(0.16, D * 0.58)]}
+                    />
+                    <meshStandardMaterial map={drawerTexture} color={f.hex} roughness={0.8} />
+                  </mesh>
+                  <mesh position={[0, -dh * 0.15, -D * 0.55]}>
+                    <boxGeometry
+                      args={[Math.max(0.12, W - 0.08), Math.max(0.07, dh * 0.55), 0.018]}
+                    />
+                    <meshStandardMaterial color="#756b63" roughness={0.85} />
+                  </mesh>
+                  <mesh position={[-W * 0.18, -dh * 0.1, -D * 0.22]}>
                     <boxGeometry
                       args={[Math.min(0.16, W * 0.22), Math.min(0.06, dh * 0.3), 0.08]}
                     />
                     <meshStandardMaterial map={drawerTexture} color="#b9a58e" roughness={0.9} />
                   </mesh>
-                  <mesh position={[W * 0.18, -dh * 0.12, -0.02]}>
+                  <mesh position={[W * 0.18, -dh * 0.1, -D * 0.22]}>
                     <boxGeometry
                       args={[Math.min(0.18, W * 0.26), Math.min(0.05, dh * 0.26), 0.07]}
                     />
@@ -1176,8 +1204,12 @@ const UnitMesh = memo(function UnitMesh({
                 color={f.hex}
                 roughness={f.roughness}
               />
+              <mesh position={[0, -dh / 2 + 0.006, 0.018]}>
+                <boxGeometry args={[Math.max(0.12, W - 0.08), 0.008, 0.006]} />
+                <meshStandardMaterial color="#756b63" roughness={0.72} />
+              </mesh>
               <mesh position={[0, 0, 0.018]} castShadow>
-                <boxGeometry args={[Math.min(0.22, W * 0.34), 0.012, 0.018]} />
+                <boxGeometry args={[Math.min(0.28, W * 0.42), 0.018, 0.022]} />
                 <meshStandardMaterial color="#9aa2a6" metalness={0.9} roughness={0.25} />
               </mesh>
             </group>
@@ -1557,44 +1589,44 @@ export default function ModularScene({
         {units.map((u) => {
           const displayUnit = drag?.id === u.id ? drag.preview : u;
           return (
-          <group
-            key={u.id}
-            onDoubleClick={(e) => {
-              e.stopPropagation();
-              setArmedUnitId(u.id);
-              onSelect(u.id);
-            }}
-          >
-            <UnitMesh
-              unit={displayUnit}
-              selected={selectedId === u.id || selectedIds.includes(u.id)}
-              dragging={drag?.id === u.id}
-              groupRef={(g) => {
-                groups.current[u.id] = g;
+            <group
+              key={u.id}
+              onDoubleClick={(e) => {
+                e.stopPropagation();
+                setArmedUnitId(u.id);
+                onSelect(u.id);
               }}
-              onSelect={(additive) => onSelect(u.id, additive)}
-              onDragStart={startDrag(u)}
-              onEnableMove={() => setArmedUnitId(u.id)}
-              actions={actions}
-              interior={interior}
-              interactingRef={interactingRef}
-              onFittingDown={(unit, f) => {
-                interactingRef.current = true;
-                onSelect(unit.id);
-                setFitDrag({ unitId: unit.id, fittingId: f.id });
-              }}
-              onHandleDown={(unit) => {
-                interactingRef.current = true;
-                setHandleDrag({ unitId: unit.id });
-              }}
-              outLeft={Math.max(0, u.x - u.w / 2 - bounds.min) / 100}
-              outRight={Math.max(0, bounds.max - (u.x + u.w / 2)) / 100}
-              showDimensions={showDimensions}
-              drawersOpen={drawersOpen}
-              invalid={invalidUnitIds.includes(u.id)}
-              movable={armedUnitId === u.id}
-            />
-          </group>
+            >
+              <UnitMesh
+                unit={displayUnit}
+                selected={selectedId === u.id || selectedIds.includes(u.id)}
+                dragging={drag?.id === u.id}
+                groupRef={(g) => {
+                  groups.current[u.id] = g;
+                }}
+                onSelect={(additive) => onSelect(u.id, additive)}
+                onDragStart={startDrag(u)}
+                onEnableMove={() => setArmedUnitId(u.id)}
+                actions={actions}
+                interior={interior}
+                interactingRef={interactingRef}
+                onFittingDown={(unit, f) => {
+                  interactingRef.current = true;
+                  onSelect(unit.id);
+                  setFitDrag({ unitId: unit.id, fittingId: f.id });
+                }}
+                onHandleDown={(unit) => {
+                  interactingRef.current = true;
+                  setHandleDrag({ unitId: unit.id });
+                }}
+                outLeft={Math.max(0, u.x - u.w / 2 - bounds.min) / 100}
+                outRight={Math.max(0, bounds.max - (u.x + u.w / 2)) / 100}
+                showDimensions={showDimensions}
+                drawersOpen={drawersOpen}
+                invalid={invalidUnitIds.includes(u.id)}
+                movable={armedUnitId === u.id}
+              />
+            </group>
           );
         })}
 

@@ -1906,9 +1906,26 @@ function DrawerStack({
             {open && (
               <>
                 {/* The drawer box moves with the front, leaving a readable open cavity. */}
+                {/* Open drawer box: bottom, side walls and back make the extension readable. */}
                 <mesh position={[x + w / 2, drawerY + cm(2), z - cm(8)]}>
                   <boxGeometry args={[w - cm(2), cm(2), Math.max(cm(8), cm(28))]} />
                   <meshStandardMaterial map={texture} color={color} roughness={0.8} />
+                </mesh>
+                <mesh position={[x + cm(2), drawerY + drawerH * 0.42, z - cm(8)]}>
+                  <boxGeometry
+                    args={[cm(1.5), Math.max(cm(7), drawerH * 0.55), Math.max(cm(8), cm(28))]}
+                  />
+                  <meshStandardMaterial map={texture} color={color} roughness={0.8} />
+                </mesh>
+                <mesh position={[x + w - cm(2), drawerY + drawerH * 0.42, z - cm(8)]}>
+                  <boxGeometry
+                    args={[cm(1.5), Math.max(cm(7), drawerH * 0.55), Math.max(cm(8), cm(28))]}
+                  />
+                  <meshStandardMaterial map={texture} color={color} roughness={0.8} />
+                </mesh>
+                <mesh position={[x + w / 2, drawerY + drawerH * 0.42, z - cm(21)]}>
+                  <boxGeometry args={[w - cm(2), Math.max(cm(7), drawerH * 0.55), cm(1.5)]} />
+                  <meshStandardMaterial color="#756b63" roughness={0.85} />
                 </mesh>
                 <mesh position={[x + w * 0.32, drawerY + cm(5), z - cm(1)]}>
                   <boxGeometry args={[Math.min(cm(12), w * 0.22), cm(5), cm(4)]} />
@@ -1921,12 +1938,17 @@ function DrawerStack({
               </>
             )}
             <Panel
-              size={[w - cm(0.6), Math.max(cm(1), drawerH - cm(0.6)), T]}
+              // A slightly wider reveal keeps each front visually separate.
+              size={[w - cm(0.8), Math.max(cm(1), drawerH - cm(1.2)), T]}
               position={[x + w / 2, drawerY + drawerH / 2, z]}
               color={color}
               roughness={roughness}
               highlight={state}
             />
+            <mesh position={[x + w / 2, drawerY + cm(0.7), z + T + cm(0.01)]}>
+              <boxGeometry args={[Math.max(cm(10), w - cm(8)), cm(0.7), cm(0.3)]} />
+              <meshStandardMaterial color="#756b63" roughness={0.72} />
+            </mesh>
             {handleStyle === "knob" ? (
               <mesh position={[x + w / 2, drawerY + drawerH / 2, z + T]}>
                 <sphereGeometry args={[cm(2), 16, 12]} />
@@ -1938,9 +1960,9 @@ function DrawerStack({
                   args={[
                     handleStyle === "profile" || handleStyle === "edge"
                       ? cm(1.8)
-                      : Math.min(w * 0.5, cm(28)),
-                    handleStyle === "profile" ? Math.max(cm(10), drawerH - cm(4)) : cm(1.2),
-                    cm(1.2),
+                      : Math.min(w * 0.56, cm(32)),
+                    handleStyle === "profile" ? Math.max(cm(10), drawerH - cm(4)) : cm(1.6),
+                    cm(1.4),
                   ]}
                 />
                 <meshStandardMaterial color="#8d9296" roughness={0.35} metalness={0.75} />

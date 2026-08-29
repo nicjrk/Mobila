@@ -146,6 +146,26 @@
   body {
     background-color: var(--color-background);
     color: var(--color-foreground);
+    overflow-x: hidden;
+  }
+}
+
+@media (max-width: 767px) {
+  html,
+  body {
+    min-width: 320px;
+    overscroll-behavior: none;
+  }
+
+  input,
+  select,
+  textarea {
+    font-size: 16px;
+  }
+
+  button,
+  [role="button"] {
+    touch-action: manipulation;
   }
 }
 

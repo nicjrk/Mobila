@@ -401,7 +401,7 @@ describe("modular planner core rules", () => {
 
   it("contains the built-in L kitchen layout without cabinet collisions", () => {
     const config = enterModular(defaultConfig());
-    expect(KITCHEN_LAYOUT_PRESETS).toHaveLength(2);
+    expect(KITCHEN_LAYOUT_PRESETS).toHaveLength(3);
     for (const [layoutIndex, layout] of KITCHEN_LAYOUT_PRESETS.entries()) {
       expect(layout.units.length).toBeGreaterThan(8);
       const units = layout.units.map((item, index) =>
