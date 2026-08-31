@@ -1,9 +1,11 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { TechnicalDimension } from "./TechnicalDimension";
 import { planBounds, planItems, type PlanItem } from "@/lib/plan";
 import { ITEM_META, type Config, type WallId } from "@/lib/wardrobe";
 import { isUnitPlacementValid, snapUnitToRoom } from "@/lib/units";
 
 const SCALE = 2.4;
+const cm = (value: number) => `${Math.round(value * 10) / 10} cm`;
 
 export default function PlanView({
   config,
@@ -181,16 +183,76 @@ export default function PlanView({
           </defs>
           {showGrid && <rect width={width} height={height} fill="url(#plan-grid)" />}
           {config.roomShape === "modular" && (
-            <rect
-              x={toX(-config.modularRoom.width / 2)}
-              y={toY(config.modularRoom.depth)}
-              width={config.modularRoom.width * SCALE}
-              height={config.modularRoom.depth * SCALE}
-              fill="#f0ede7"
-              fillOpacity="0.45"
-              stroke="#777f78"
-              strokeWidth="2"
-            />
+            <>
+              <rect
+                x={toX(-config.modularRoom.width / 2)}
+                y={toY(config.modularRoom.depth)}
+                width={config.modularRoom.width * SCALE}
+                height={config.modularRoom.depth * SCALE}
+                fill="#f0ede7"
+                fillOpacity="0.45"
+                stroke="#777f78"
+                strokeWidth="2"
+              />
+              <text
+                x={toX(0)}
+                y={toY(config.modularRoom.depth) + 18}
+                textAnchor="middle"
+                fontSize="9"
+                fontWeight="600"
+                letterSpacing="1"
+                fill="#69736d"
+              >
+                BACK WALL
+              </text>
+              <line
+                x1={toX(-config.modularRoom.width / 2)}
+                y1={toY(0)}
+                x2={toX(-config.modularRoom.width / 2)}
+                y2={toY(0) + 34}
+                stroke="#9aa69f"
+                strokeWidth="1"
+              />
+              <line
+                x1={toX(config.modularRoom.width / 2)}
+                y1={toY(0)}
+                x2={toX(config.modularRoom.width / 2)}
+                y2={toY(0) + 34}
+                stroke="#9aa69f"
+                strokeWidth="1"
+              />
+              <TechnicalDimension
+                x1={toX(-config.modularRoom.width / 2)}
+                y1={toY(0) + 34}
+                x2={toX(config.modularRoom.width / 2)}
+                y2={toY(0) + 34}
+                label={`Room width · ${cm(config.modularRoom.width)}`}
+              />
+              <line
+                x1={toX(config.modularRoom.width / 2)}
+                y1={toY(config.modularRoom.depth)}
+                x2={toX(config.modularRoom.width / 2) + 34}
+                y2={toY(config.modularRoom.depth)}
+                stroke="#9aa69f"
+                strokeWidth="1"
+              />
+              <line
+                x1={toX(config.modularRoom.width / 2)}
+                y1={toY(0)}
+                x2={toX(config.modularRoom.width / 2) + 34}
+                y2={toY(0)}
+                stroke="#9aa69f"
+                strokeWidth="1"
+              />
+              <TechnicalDimension
+                x1={toX(config.modularRoom.width / 2) + 34}
+                y1={toY(config.modularRoom.depth)}
+                x2={toX(config.modularRoom.width / 2) + 34}
+                y2={toY(0)}
+                label={`Room depth · ${cm(config.modularRoom.depth)}`}
+                vertical
+              />
+            </>
           )}
           {items.map((item) => {
             const selected = item.selected;

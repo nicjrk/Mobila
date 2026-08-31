@@ -18,25 +18,23 @@ import {
   walls,
 } from "@/lib/wardrobe";
 import { drawerStackHeight, FITTING_META, fittingsOf } from "@/lib/fittings";
+import {
+  buildConstructionAssemblies,
+  buildUnitConstruction,
+  type ConstructionAssembly,
+  type ConstructionHardware,
+  type ConstructionPart,
+} from "@/lib/construction";
 
-export type CncPart = {
-  id: string;
-  label: string;
-  cabinet: string;
-  width: number;
-  height: number;
-  thickness: number;
-  grain: "vertical" | "horizontal" | "none";
-  note?: string;
-  cnc: boolean;
-  glass?: boolean;
-};
+export type CncPart = ConstructionPart;
 
 export type NestedPart = CncPart & { x: number; y: number; rotated: boolean; sheet: number };
 export type CncSheet = { number: number; width: number; height: number; parts: NestedPart[] };
 export type CncCutlist = {
   settings: CncSettings;
   parts: CncPart[];
+  assemblies: ConstructionAssembly[];
+  hardware: ConstructionHardware[];
   sheets: CncSheet[];
   oversized: CncPart[];
   unsupported: CncUnsupported[];
@@ -74,6 +72,23 @@ export const cncSettings = (config: Config): CncSettings => {
     sheetWidth: positive(raw.sheetWidth, DEFAULT_CNC_SETTINGS.sheetWidth),
     sheetHeight: positive(raw.sheetHeight, DEFAULT_CNC_SETTINGS.sheetHeight),
     sheetMargin: positive(raw.sheetMargin, DEFAULT_CNC_SETTINGS.sheetMargin),
+    edgeBandThickness: positive(raw.edgeBandThickness, DEFAULT_CNC_SETTINGS.edgeBandThickness!),
+    holeDiameter: positive(raw.holeDiameter, DEFAULT_CNC_SETTINGS.holeDiameter!),
+    holeDepth: positive(raw.holeDepth, DEFAULT_CNC_SETTINGS.holeDepth!),
+    holePitch: positive(raw.holePitch, DEFAULT_CNC_SETTINGS.holePitch!),
+    holeOffset: positive(raw.holeOffset, DEFAULT_CNC_SETTINGS.holeOffset!),
+    backRebateWidth: positive(raw.backRebateWidth, DEFAULT_CNC_SETTINGS.backRebateWidth!),
+    backRebateDepth: positive(raw.backRebateDepth, DEFAULT_CNC_SETTINGS.backRebateDepth!),
+    hingeCupDiameter: positive(raw.hingeCupDiameter, DEFAULT_CNC_SETTINGS.hingeCupDiameter!),
+    hingeCupDepth: positive(raw.hingeCupDepth, DEFAULT_CNC_SETTINGS.hingeCupDepth!),
+    hingeOffset: positive(raw.hingeOffset, DEFAULT_CNC_SETTINGS.hingeOffset!),
+    connectorDiameter: positive(raw.connectorDiameter, DEFAULT_CNC_SETTINGS.connectorDiameter!),
+    connectorDepth: positive(raw.connectorDepth, DEFAULT_CNC_SETTINGS.connectorDepth!),
+    countertopThickness: positive(
+      raw.countertopThickness,
+      DEFAULT_CNC_SETTINGS.countertopThickness!,
+    ),
+    joinery: raw.joinery ?? DEFAULT_CNC_SETTINGS.joinery ?? "confirmat",
   };
 };
 
@@ -173,7 +188,7 @@ const fittingParts = (unit: Unit, cabinet: string, settings: CncSettings): CncPa
   return result;
 };
 
-export function partsForUnit(unit: Unit, index: number, settings: CncSettings): CncPart[] {
+function legacyPartsForUnit(unit: Unit, index: number, settings: CncSettings): CncPart[] {
   if (unit.standaloneAppliance) return [];
   const cabinet = unit.name?.trim() || `Cabinet ${index + 1}`;
   const thickness = settings.panelThickness / 10;
@@ -279,6 +294,10 @@ export function partsForUnit(unit: Unit, index: number, settings: CncSettings): 
     }
   }
   return result.filter(safePart);
+}
+
+export function partsForUnit(unit: Unit, index: number, settings: CncSettings): CncPart[] {
+  return buildUnitConstruction(unit, index, settings).parts.filter(safePart);
 }
 
 export function partsForWallRuns(config: Config, settings: CncSettings): CncPart[] {
@@ -471,10 +490,12 @@ export function partsForWallRuns(config: Config, settings: CncSettings): CncPart
 
 export function buildCncCutlist(config: Config): CncCutlist {
   const settings = cncSettings(config);
+  const assemblies = buildConstructionAssemblies(config.units, settings);
   const parts = [
-    ...config.units.flatMap((unit, index) => partsForUnit(unit, index, settings)),
+    ...assemblies.flatMap((assembly) => assembly.parts.filter(safePart)),
     ...partsForWallRuns(config, settings),
   ];
+  const hardware = assemblies.flatMap((assembly) => assembly.hardware);
   const unsupported: CncUnsupported[] = [
     ...config.units
       .filter((unit) => unit.underStairs)
@@ -507,12 +528,16 @@ export function buildCncCutlist(config: Config): CncCutlist {
   const camReviewReasons = parts.length
     ? [
         {
-          ro: "DXF-ul conține doar contururile și etichetele panourilor; traseele de tăiere nu sunt generate.",
-          en: "The DXF contains panel boundaries and labels only; cutting toolpaths are not generated.",
+          ro: "DXF-ul conține contururi, marcaje de găurire și frezare; traseele de tăiere nu sunt generate.",
+          en: "The DXF contains panel boundaries plus drilling/routing markers; cutting toolpaths are not generated.",
         },
         {
-          ro: "Găurile pentru feronerie, canturile, nuturile și îmbinările trebuie generate într-un profil CAM al utilajului.",
-          en: "Hardware drilling, edge banding, rebates and joinery must be generated in the machine's CAM profile.",
+          ro: "Operațiile parametrice sunt nominale și trebuie verificate în CAM în funcție de scule, sensul feței și sistemul de îmbinare.",
+          en: "Parametric operations are nominal and must be verified in CAM for tools, face orientation and joinery system.",
+        },
+        {
+          ro: "Canturile și feroneria sunt livrate ca metadate de producție; aplicarea lor fizică rămâne etapă separată de debitare.",
+          en: "Edge bands and hardware are exported as production metadata; physical application remains separate from cutting.",
         },
         ...(hasApplianceInstallations
           ? [
@@ -524,7 +549,17 @@ export function buildCncCutlist(config: Config): CncCutlist {
           : []),
       ]
     : [];
-  return { settings, parts, sheets, oversized, unsupported, totalAreaM2, camReviewReasons };
+  return {
+    settings,
+    parts,
+    assemblies,
+    hardware,
+    sheets,
+    oversized,
+    unsupported,
+    totalAreaM2,
+    camReviewReasons,
+  };
 }
 
 export function nestParts(parts: CncPart[], settings: CncSettings): CncSheet[] {
@@ -690,6 +725,97 @@ export function validateCncCutlist(cutlist: CncCutlist): CncValidationIssue[] {
         partId: item.id,
       });
     }
+    const operationIds = new Set<string>();
+    (item.operations ?? []).forEach((operation) => {
+      if (operationIds.has(operation.id)) {
+        issues.push({
+          id: `cnc-operation-duplicate-${item.id}-${operation.id}`,
+          severity: "error",
+          message: `Part "${item.label}" contains the operation "${operation.id}" more than once. Regenerate the construction model before machining.`,
+          messageRo: `Piesa „${item.label}” conține operația „${operation.id}” de mai multe ori. Regenerează modelul tehnic înainte de prelucrare.`,
+          partId: item.id,
+        });
+      }
+      operationIds.add(operation.id);
+      if (operation.kind === "drill") {
+        const validNumbers = [operation.x, operation.y, operation.diameter, operation.depth].every(
+          Number.isFinite,
+        );
+        const radius = Math.max(0, operation.diameter / 2);
+        const inside =
+          operation.x >= radius - 0.1 &&
+          operation.y >= radius - 0.1 &&
+          operation.x <= item.width - radius + 0.1 &&
+          operation.y <= item.height - radius + 0.1;
+        if (!validNumbers || operation.diameter <= 0 || operation.depth <= 0) {
+          issues.push({
+            id: `cnc-operation-invalid-${item.id}-${operation.id}`,
+            severity: "error",
+            message: `Drilling operation "${operation.id}" on part "${item.label}" has invalid diameter, depth or coordinates.`,
+            messageRo: `Operația de găurire „${operation.id}” de pe piesa „${item.label}” are diametru, adâncime sau coordonate invalide.`,
+            partId: item.id,
+          });
+        } else if (!inside) {
+          issues.push({
+            id: `cnc-operation-outside-${item.id}-${operation.id}`,
+            severity: "error",
+            message: `Drilling operation "${operation.id}" on part "${item.label}" falls outside the panel boundary.`,
+            messageRo: `Operația de găurire „${operation.id}” de pe piesa „${item.label}” cade în afara conturului panoului.`,
+            partId: item.id,
+          });
+        }
+      } else if (operation.kind === "route") {
+        const validPath =
+          operation.path.length >= 2 &&
+          operation.path.every(
+            (point) =>
+              Number.isFinite(point.x) &&
+              Number.isFinite(point.y) &&
+              point.x >= -0.1 &&
+              point.y >= -0.1 &&
+              point.x <= item.width + 0.1 &&
+              point.y <= item.height + 0.1,
+          );
+        if (!validPath || operation.toolDiameter <= 0 || operation.depth <= 0) {
+          issues.push({
+            id: `cnc-route-invalid-${item.id}-${operation.id}`,
+            severity: "error",
+            message: `Routing operation "${operation.id}" on part "${item.label}" has an invalid path or depth.`,
+            messageRo: `Operația de frezare „${operation.id}” de pe piesa „${item.label}” are traseu sau adâncime invalide.`,
+            partId: item.id,
+          });
+        }
+      } else {
+        const validCutout =
+          Number.isFinite(operation.x) &&
+          Number.isFinite(operation.y) &&
+          Number.isFinite(operation.width) &&
+          Number.isFinite(operation.height) &&
+          operation.width > 0 &&
+          operation.height > 0 &&
+          operation.x >= -0.1 &&
+          operation.y >= -0.1 &&
+          operation.x + operation.width <= item.width + 0.1 &&
+          operation.y + operation.height <= item.height + 0.1;
+        if (!validCutout) {
+          issues.push({
+            id: `cnc-cutout-invalid-${item.id}-${operation.id}`,
+            severity: "error",
+            message: `Cutout "${operation.id}" on part "${item.label}" falls outside the panel boundary.`,
+            messageRo: `Decupajul „${operation.id}” de pe piesa „${item.label}” cade în afara conturului panoului.`,
+            partId: item.id,
+          });
+        } else if (!operation.verified) {
+          issues.push({
+            id: `cnc-cutout-unverified-${item.id}-${operation.id}`,
+            severity: "warning",
+            message: `Cutout "${operation.purpose}" on part "${item.label}" is nominal and needs manufacturer verification.`,
+            messageRo: `Decupajul „${operation.purpose}” de pe piesa „${item.label}” este nominal și trebuie verificat după desenul producătorului.`,
+            partId: item.id,
+          });
+        }
+      }
+    });
   });
 
   sheets.forEach((sheet) => {

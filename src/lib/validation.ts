@@ -118,6 +118,20 @@ export function validateConfig(config: Config): ValidationIssue[] {
       }
     }
 
+    const needsWallFixing =
+      unit.mount === "wall" ||
+      unit.mount === "tall" ||
+      (unit.y ?? 0) > 0 ||
+      (unit.mount === "base" && unit.drawers >= 2);
+    if (needsWallFixing) {
+      add({
+        id: `${unit.id}-wall-fixing-required`,
+        severity: "warning",
+        message: `Unit ${index + 1}: plan a wall fixing or anti-tip kit before loading this cabinet; choose anchors for the actual wall material.`,
+        unitId: unit.id,
+      });
+    }
+
     const fittings = fittingsOf(unit);
     const height = innerHeight(unit);
     fittings.forEach((fitting) => {
@@ -238,11 +252,21 @@ export function validateConfig(config: Config): ValidationIssue[] {
     }
     const hasSink = (unit.appliances ?? []).some((appliance) => appliance.type === "sink");
     const hasHob = (unit.appliances ?? []).some((appliance) => appliance.type === "hob");
+    const sinkAppliance = (unit.appliances ?? []).find((appliance) => appliance.type === "sink");
+    const hobAppliance = (unit.appliances ?? []).find((appliance) => appliance.type === "hob");
     if (unit.faucet && !hasSink) {
       add({
         id: `${unit.id}-faucet-without-sink`,
         severity: "warning",
         message: `Unit ${index + 1}: a faucet is selected but this cabinet has no sink yet.`,
+        unitId: unit.id,
+      });
+    }
+    if (unit.faucet && !unit.countertop) {
+      add({
+        id: `${unit.id}-faucet-without-countertop`,
+        severity: "warning",
+        message: `Unit ${index + 1}: the faucet needs a countertop mounting surface.`,
         unitId: unit.id,
       });
     }
@@ -261,6 +285,43 @@ export function validateConfig(config: Config): ValidationIssue[] {
         message: `Unit ${index + 1}: sinks and hobs are normally installed in a base unit.`,
         unitId: unit.id,
       });
+    }
+    if (hasSink && unit.d < 58) {
+      add({
+        id: `${unit.id}-sink-service-depth`,
+        severity: "warning",
+        message: `Unit ${index + 1}: the sink base is only ${Math.round(unit.d)} cm deep; reserve at least 58 cm for the bowl, waste trap and rear service clearance.`,
+        unitId: unit.id,
+      });
+    }
+    if (hasSink && unit.front === "none") {
+      add({
+        id: `${unit.id}-sink-without-front`,
+        severity: "warning",
+        message: `Unit ${index + 1}: the sink cabinet has no front, so the plumbing and carcass will remain exposed.`,
+        unitId: unit.id,
+      });
+    }
+    if (hasSink && unit.drawers > 0) {
+      add({
+        id: `${unit.id}-sink-drawer-plumbing`,
+        severity: "warning",
+        message: `Unit ${index + 1}: verify that the drawer stack leaves room for the sink waste trap and water connections.`,
+        unitId: unit.id,
+      });
+    }
+    if (hasSink && hasHob && sinkAppliance && hobAppliance) {
+      const sinkX = sinkAppliance.x ?? 0;
+      const hobX = hobAppliance.x ?? 0;
+      const minimumCenterDistance = (50 + 56) / 2 + 5;
+      if (Math.abs(sinkX - hobX) < minimumCenterDistance) {
+        add({
+          id: `${unit.id}-sink-hob-clearance`,
+          severity: "warning",
+          message: `Unit ${index + 1}: the sink and hob are too close in this worktop; keep at least 5 cm between their nominal cutouts and verify both manufacturer drawings.`,
+          unitId: unit.id,
+        });
+      }
     }
     if (unit.backsplash && !unit.countertop) {
       add({

@@ -55,9 +55,9 @@ export function defaultFittings(u: Unit): Fitting[] {
   const list: Fitting[] = [];
   const n = Math.max(0, u.shelves ?? 0);
   for (let i = 0; i < n; i++) {
-    list.push({ id: newFittingId(), type: "shelf", y: snapHole(((i + 1) * H) / (n + 1)) });
+    list.push({ id: `${u.id}-legacy-shelf-${i}`, type: "shelf", y: snapHole(((i + 1) * H) / (n + 1)) });
   }
-  if (u.rail) list.push({ id: newFittingId(), type: "rail", y: snapHole(H - 12) });
+  if (u.rail) list.push({ id: `${u.id}-legacy-rail`, type: "rail", y: snapHole(H - 12) });
   return sortFittings(list);
 }
 

@@ -1,4 +1,5 @@
 import { skuForBomKey } from "@/lib/catalog";
+import { FITTING_META } from "@/lib/fittings";
 
 export type FinishId = "greige" | "white" | "oak" | "blackbrown";
 export type DoorStyle = "flat" | "glass" | "framed";
@@ -571,7 +572,7 @@ export function applianceModuleSpec(type: ApplianceType): ApplianceModuleSpec {
         d: 60,
         y: 0,
         mount: "base",
-        front: "door",
+        front: "double",
         countertop: true,
         countertopMaterial: "stone",
         faucet: true,
@@ -595,26 +596,35 @@ export function applianceModuleSpec(type: ApplianceType): ApplianceModuleSpec {
   }
 }
 
-export const unitPrice = (u: Unit) =>
-  u.standaloneAppliance
-    ? ITEM_META[u.standaloneAppliance].price
-    : Math.round(
-        70 +
-          u.w * u.h * 0.0042 +
-          u.d * 0.8 +
-          (UNIT_FRONTS.find((f) => f.id === u.front)?.price ?? 0) +
-          (u.front !== "none"
-            ? (DOOR_MATERIALS.find((m) => m.id === (u.doorMaterial ?? "solid"))?.price ?? 0)
-            : 0) +
-          u.shelves * ITEM_META.shelf.price +
-          (u.rail ? ITEM_META.rail.price : 0) +
-          u.drawers * ITEM_META.drawer.price +
-          (u.light ? ITEM_META.light.price : 0) +
-          (u.countertop ? 80 + u.w * 0.45 : 0) +
-          (u.faucet ? 95 : 0) +
-          (u.backsplash ? 28 + u.w * 0.18 : 0) +
-          (u.appliances ?? []).reduce((sum, appliance) => sum + ITEM_META[appliance.type].price, 0),
-      );
+export const unitPrice = (u: Unit) => {
+  if (u.standaloneAppliance) return ITEM_META[u.standaloneAppliance].price;
+  const additionalFittings = (u.fittings ?? []).reduce(
+    (sum, fitting) =>
+      sum +
+      (fitting.type === "basket" || fitting.type === "shoerack" || fitting.type === "cargo"
+        ? FITTING_META[fitting.type].price
+        : 0),
+    0,
+  );
+  return Math.round(
+    70 +
+      u.w * u.h * 0.0042 +
+      u.d * 0.8 +
+      (UNIT_FRONTS.find((f) => f.id === u.front)?.price ?? 0) +
+      (u.front !== "none"
+        ? (DOOR_MATERIALS.find((m) => m.id === (u.doorMaterial ?? "solid"))?.price ?? 0)
+        : 0) +
+      u.shelves * ITEM_META.shelf.price +
+      (u.rail ? ITEM_META.rail.price : 0) +
+      u.drawers * ITEM_META.drawer.price +
+      additionalFittings +
+      (u.light ? ITEM_META.light.price : 0) +
+      (u.countertop ? 80 + u.w * 0.45 : 0) +
+      (u.faucet ? 95 : 0) +
+      (u.backsplash ? 28 + u.w * 0.18 : 0) +
+      (u.appliances ?? []).reduce((sum, appliance) => sum + ITEM_META[appliance.type].price, 0),
+  );
+};
 
 export type Config = {
   roomShape: RoomShape;
@@ -679,6 +689,21 @@ export type CncSettings = {
   sheetWidth: number;
   sheetHeight: number;
   sheetMargin: number;
+  /** Parametric manufacturing defaults. Optional for backwards-compatible saved projects. */
+  edgeBandThickness?: number;
+  holeDiameter?: number;
+  holeDepth?: number;
+  holePitch?: number;
+  holeOffset?: number;
+  backRebateWidth?: number;
+  backRebateDepth?: number;
+  hingeCupDiameter?: number;
+  hingeCupDepth?: number;
+  hingeOffset?: number;
+  connectorDiameter?: number;
+  connectorDepth?: number;
+  countertopThickness?: number;
+  joinery?: "confirmat" | "cam-dowel" | "dowel";
 };
 
 export const DEFAULT_CNC_SETTINGS: CncSettings = {
@@ -688,6 +713,20 @@ export const DEFAULT_CNC_SETTINGS: CncSettings = {
   sheetWidth: 2800,
   sheetHeight: 2070,
   sheetMargin: 10,
+  edgeBandThickness: 0.8,
+  holeDiameter: 5,
+  holeDepth: 12,
+  holePitch: 32,
+  holeOffset: 37,
+  backRebateWidth: 8,
+  backRebateDepth: 8,
+  hingeCupDiameter: 35,
+  hingeCupDepth: 13,
+  hingeOffset: 100,
+  connectorDiameter: 5,
+  connectorDepth: 30,
+  countertopThickness: 38,
+  joinery: "confirmat",
 };
 
 export type ModularRoom = {

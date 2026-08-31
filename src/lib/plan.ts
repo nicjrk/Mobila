@@ -18,6 +18,8 @@ export type PlanItem = {
   bay?: number;
   x: number;
   z: number;
+  /** Bottom elevation above the floor, used by front/elevation projections. */
+  elevation: number;
   width: number;
   depth: number;
   height: number;
@@ -87,6 +89,7 @@ export function planItems(
       label: unit.name ?? `Unit ${index + 1}`,
       x: unit.x,
       z: unit.z,
+      elevation: unit.y,
       width: unit.w,
       depth: unit.d,
       height: unit.h,
@@ -114,6 +117,7 @@ export function planItems(
         bay: index,
         x: p.x + cos * localX,
         z: p.z + sin * localX,
+        elevation: 0,
         width: bayWidth,
         depth: spec.depth,
         height: spec.height,

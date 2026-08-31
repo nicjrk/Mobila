@@ -1,5 +1,5 @@
 import { Canvas, useFrame, useThree, type ThreeEvent } from "@react-three/fiber";
-import { Environment, Grid, Html, Line, TransformControls } from "@react-three/drei";
+import { Environment, Grid, Html, Line, RoundedBox, TransformControls } from "@react-three/drei";
 import { lazy, memo, Suspense, useCallback, useEffect, useMemo, useRef, useState } from "react";
 import * as THREE from "three";
 import type { FocusRequest } from "./CameraRig";
@@ -34,6 +34,7 @@ import {
   innerBase,
   innerHeight,
 } from "@/lib/fittings";
+import type { AssemblyStepKind } from "@/lib/assembly-guide";
 import { useIsMobile } from "@/hooks/use-mobile";
 import {
   Copy,
@@ -49,9 +50,23 @@ import {
   Archive,
 } from "lucide-react";
 
-const P = 0.018; // panel thickness in metres
-
 const FALLBACK = { hex: "#e8e3da", roughness: 0.6 };
+const ASSEMBLY_STAGE_RANK: Record<AssemblyStepKind, number> = {
+  prepare: 0,
+  carcass: 1,
+  back: 2,
+  base: 3,
+  interior: 4,
+  drawers: 5,
+  fronts: 6,
+  services: 7,
+  final: 8,
+};
+const assemblyStageVisible = (
+  active: AssemblyStepKind | null | undefined,
+  required: Exclude<AssemblyStepKind, "prepare" | "final">,
+) =>
+  !active || active === "final" || (active !== "prepare" && ASSEMBLY_STAGE_RANK[active] >= ASSEMBLY_STAGE_RANK[required]);
 const finishOf = (id: Unit["finish"]) => {
   const f = FINISHES.find((x) => x.id === id);
   return { hex: f?.hex ?? FALLBACK.hex, roughness: f?.roughness ?? FALLBACK.roughness };
@@ -94,6 +109,7 @@ const Panel = memo(function Panel({
   transparent = false,
   opacity = 1,
   depthWrite = true,
+  bevel = 0.0025,
 }: {
   size: [number, number, number];
   position: [number, number, number];
@@ -102,16 +118,36 @@ const Panel = memo(function Panel({
   transparent?: boolean;
   opacity?: number;
   depthWrite?: boolean;
+  /** Small manufacturing-style edge break; values are in metres. */
+  bevel?: number;
 }) {
   const material = useMemo(
     () => ({ color, roughness, metalness: 0.04, transparent, opacity, depthWrite }),
     [color, roughness, transparent, opacity, depthWrite],
   );
+  const radius =
+    bevel > 0 && size.every((value) => value > 0.004)
+      ? Math.min(bevel, size[0] / 2 - 0.0005, size[1] / 2 - 0.0005, size[2] / 2 - 0.0005)
+      : 0;
   return (
-    <mesh position={position} castShadow receiveShadow>
-      <boxGeometry args={size} />
-      <meshStandardMaterial {...material} />
-    </mesh>
+    radius > 0 ? (
+      <RoundedBox
+        args={size}
+        radius={radius}
+        smoothness={2}
+        bevelSegments={2}
+        position={position}
+        castShadow
+        receiveShadow
+      >
+        <meshStandardMaterial {...material} />
+      </RoundedBox>
+    ) : (
+      <mesh position={position} castShadow receiveShadow>
+        <boxGeometry args={size} />
+        <meshStandardMaterial {...material} />
+      </mesh>
+    )
   );
 });
 
@@ -173,6 +209,240 @@ const ApplianceFace = memo(function ApplianceFace({
         <boxGeometry args={[Math.min(width * 0.64, 0.42), 0.014, 0.018]} />
         <meshStandardMaterial color="#a0a9aa" metalness={0.82} roughness={0.22} />
       </mesh>
+    </group>
+  );
+});
+
+/** A readable inset sink: metal rim, dark basin and drain detail. */
+const KitchenSinkVisual = memo(function KitchenSinkVisual({
+  width,
+  depth,
+}: {
+  width: number;
+  depth: number;
+}) {
+  const outerWidth = Math.max(0.28, Math.min(0.72, width - 0.06));
+  const outerDepth = Math.max(0.28, Math.min(0.58, depth - 0.1));
+  const rim = 0.018;
+  const basinWidth = Math.max(0.16, outerWidth - 0.1);
+  const basinDepth = Math.max(0.16, outerDepth - 0.1);
+  const steel = "#c5cdcc";
+
+  return (
+    <group>
+      <Panel
+        size={[basinWidth, 0.018, basinDepth]}
+        position={[0, -0.004, 0]}
+        color="#4b585b"
+        roughness={0.2}
+      />
+      <Panel
+        size={[outerWidth, 0.018, rim]}
+        position={[0, 0.014, -outerDepth / 2 + rim / 2]}
+        color={steel}
+        roughness={0.22}
+      />
+      <Panel
+        size={[outerWidth, 0.018, rim]}
+        position={[0, 0.014, outerDepth / 2 - rim / 2]}
+        color={steel}
+        roughness={0.22}
+      />
+      <Panel
+        size={[rim, 0.018, basinDepth]}
+        position={[-outerWidth / 2 + rim / 2, 0.014, 0]}
+        color={steel}
+        roughness={0.22}
+      />
+      <Panel
+        size={[rim, 0.018, basinDepth]}
+        position={[outerWidth / 2 - rim / 2, 0.014, 0]}
+        color={steel}
+        roughness={0.22}
+      />
+      <mesh position={[0, 0.008, basinDepth * 0.18]} rotation={[Math.PI / 2, 0, 0]}>
+        <torusGeometry args={[0.027, 0.006, 10, 24]} />
+        <meshStandardMaterial color="#b8c1c0" metalness={0.8} roughness={0.22} />
+      </mesh>
+      <mesh position={[0, 0.008, basinDepth * 0.18]}>
+        <cylinderGeometry args={[0.021, 0.021, 0.006, 24]} />
+        <meshStandardMaterial color="#273235" metalness={0.35} roughness={0.25} />
+      </mesh>
+    </group>
+  );
+});
+
+/** Recessed plinth and adjustable feet make a floor-standing sink unit read as furniture. */
+const SinkBaseFoundation = memo(function SinkBaseFoundation({
+  width,
+  depth,
+  height,
+}: {
+  width: number;
+  depth: number;
+  height: number;
+}) {
+  const footX = Math.max(0.08, width / 2 - 0.1);
+  const footZ = Math.max(0.08, depth / 2 - 0.1);
+  const footRadius = Math.min(0.035, Math.max(0.022, width * 0.05));
+  const front = depth / 2 - 0.018;
+  return (
+    <group>
+      {[-footX, footX].flatMap((x) =>
+        [-footZ, footZ].map((z) => (
+          <mesh key={`${x}-${z}`} position={[x, height / 2, z]} castShadow>
+            <cylinderGeometry args={[footRadius, footRadius * 1.08, height, 16]} />
+            <meshStandardMaterial color="#303738" metalness={0.28} roughness={0.5} />
+          </mesh>
+        )),
+      )}
+      <Panel
+        size={[Math.max(0.2, width - 0.08), Math.max(0.035, height - 0.01), 0.028]}
+        position={[0, height / 2, front]}
+        color="#454c4c"
+        roughness={0.8}
+      />
+      <Panel
+        size={[Math.max(0.2, width - 0.08), 0.012, 0.034]}
+        position={[0, height - 0.008, front]}
+        color="#69706f"
+        roughness={0.66}
+      />
+    </group>
+  );
+});
+
+/** Small metal brackets shown in assembly preview when the cabinet needs anchoring. */
+const WallFixingVisual = memo(function WallFixingVisual({
+  width,
+  height,
+  depth,
+}: {
+  width: number;
+  height: number;
+  depth: number;
+}) {
+  const x = Math.max(0.1, Math.min(width / 2 - 0.08, width * 0.32));
+  const y = Math.max(0.08, height - 0.08);
+  const z = -depth / 2 + 0.018;
+  return (
+    <group>
+      {[-x, x].map((anchorX) => (
+        <group key={anchorX} position={[anchorX, y, z]}>
+          <mesh castShadow>
+            <boxGeometry args={[0.08, 0.014, 0.06]} />
+            <meshStandardMaterial color="#7f8989" metalness={0.82} roughness={0.24} />
+          </mesh>
+          <mesh position={[0, 0.035, -0.026]} castShadow>
+            <boxGeometry args={[0.014, 0.07, 0.014]} />
+            <meshStandardMaterial color="#aab1b0" metalness={0.88} roughness={0.2} />
+          </mesh>
+        </group>
+      ))}
+    </group>
+  );
+});
+
+/** Visible only with open sink doors: a compact waste trap and rear service pipes. */
+const SinkPlumbingVisual = memo(function SinkPlumbingVisual({
+  width,
+  height,
+  depth,
+}: {
+  width: number;
+  height: number;
+  depth: number;
+}) {
+  const pipe = "#718083";
+  const trapOffset = Math.min(0.07, Math.max(0.04, width * 0.11));
+  const pipeZ = Math.min(depth / 2 - 0.08, Math.max(-depth / 2 + 0.08, 0.04));
+  const supplyX = Math.min(0.16, Math.max(0.08, width * 0.24));
+  return (
+    <group>
+      <mesh position={[0, height - 0.13, pipeZ]} castShadow>
+        <cylinderGeometry args={[0.009, 0.009, 0.22, 14]} />
+        <meshStandardMaterial color={pipe} metalness={0.35} roughness={0.38} />
+      </mesh>
+      <mesh
+        position={[trapOffset / 2, height - 0.24, pipeZ]}
+        rotation={[0, 0, Math.PI / 2]}
+        castShadow
+      >
+        <cylinderGeometry args={[0.009, 0.009, trapOffset, 14]} />
+        <meshStandardMaterial color={pipe} metalness={0.35} roughness={0.38} />
+      </mesh>
+      <mesh position={[trapOffset, height - 0.29, pipeZ]} castShadow>
+        <cylinderGeometry args={[0.009, 0.009, 0.1, 14]} />
+        <meshStandardMaterial color={pipe} metalness={0.35} roughness={0.38} />
+      </mesh>
+      {[-supplyX, supplyX].map((x) => (
+        <mesh key={x} position={[x, height * 0.48, -depth / 2 + 0.08]} castShadow>
+          <cylinderGeometry args={[0.006, 0.006, Math.max(0.18, height * 0.42), 12]} />
+          <meshStandardMaterial color="#587176" metalness={0.18} roughness={0.45} />
+        </mesh>
+      ))}
+    </group>
+  );
+});
+
+/** Worktop assembled around the nominal sink/hob opening instead of covering it. */
+const KitchenWorktopVisual = memo(function KitchenWorktopVisual({
+  width,
+  depth,
+  material,
+  appliance,
+}: {
+  width: number;
+  depth: number;
+  material: Unit["countertopMaterial"];
+  appliance?: { type: "sink" | "hob"; x?: number | undefined } | undefined;
+}) {
+  const totalWidth = width + 0.04;
+  const totalDepth = depth + 0.06;
+  const thickness = 0.045;
+  const color = material === "wood" ? "#b98a58" : material === "laminate" ? "#d9d1c4" : "#8c9390";
+  const roughness = material === "stone" ? 0.3 : 0.6;
+
+  if (!appliance) {
+    return (
+      <Panel
+        size={[totalWidth, thickness, totalDepth]}
+        position={[0, 0, 0]}
+        color={color}
+        roughness={roughness}
+      />
+    );
+  }
+
+  const cutoutWidth =
+    appliance.type === "sink"
+      ? Math.min(0.5, Math.max(0.32, width - 0.16))
+      : Math.min(0.56, Math.max(0.32, width - 0.1));
+  const cutoutDepth =
+    appliance.type === "sink"
+      ? Math.min(0.4, Math.max(0.28, depth - 0.2))
+      : Math.min(0.49, Math.max(0.28, depth - 0.12));
+  const requestedX = (appliance.x ?? 0) / 100;
+  const maxX = Math.max(0, totalWidth / 2 - cutoutWidth / 2 - 0.02);
+  const cutoutX = Math.max(-maxX, Math.min(maxX, requestedX));
+  const left = -totalWidth / 2;
+  const right = totalWidth / 2;
+  const back = -totalDepth / 2;
+  const front = totalDepth / 2;
+  const cutoutLeft = cutoutX - cutoutWidth / 2;
+  const cutoutRight = cutoutX + cutoutWidth / 2;
+  const cutoutBack = -cutoutDepth / 2;
+  const cutoutFront = cutoutDepth / 2;
+  const piece = (key: string, size: [number, number, number], position: [number, number, number]) => (
+    <Panel key={key} size={size} position={position} color={color} roughness={roughness} />
+  );
+
+  return (
+    <group>
+      {piece("back", [totalWidth, thickness, Math.max(0.018, cutoutBack - back)], [0, 0, (back + cutoutBack) / 2])}
+      {piece("front", [totalWidth, thickness, Math.max(0.018, front - cutoutFront)], [0, 0, (cutoutFront + front) / 2])}
+      {piece("left", [Math.max(0.018, cutoutLeft - left), thickness, cutoutDepth], [(left + cutoutLeft) / 2, 0, 0])}
+      {piece("right", [Math.max(0.018, right - cutoutRight), thickness, cutoutDepth], [(cutoutRight + right) / 2, 0, 0])}
     </group>
   );
 });
@@ -690,6 +960,9 @@ const UnitMesh = memo(function UnitMesh({
   outLeft,
   outRight,
   showDimensions,
+  panelThicknessMm = 18,
+  assemblyView = false,
+  assemblyStepKind = null,
   drawersOpen = false,
   invalid,
   movable,
@@ -711,6 +984,12 @@ const UnitMesh = memo(function UnitMesh({
   outLeft: number;
   outRight: number;
   showDimensions: boolean;
+  /** Shared with the CNC model so the preview and manufacturing dimensions agree. */
+  panelThicknessMm?: number;
+  /** Temporary exploded/assembly preview; does not mutate the project. */
+  assemblyView?: boolean;
+  /** Active interactive assembly step for the selected unit. */
+  assemblyStepKind?: AssemblyStepKind | null;
   drawersOpen?: boolean;
   invalid: boolean;
   movable: boolean;
@@ -719,6 +998,7 @@ const UnitMesh = memo(function UnitMesh({
   const W = unit.w / 100;
   const H = unit.h / 100;
   const D = unit.d / 100;
+  const P = panelThicknessMm / 1000;
   const inner = W - 2 * P;
   const floating = (unit.y ?? 0) > 0;
   const plinth = floating ? 0 : 0.06;
@@ -759,19 +1039,53 @@ const UnitMesh = memo(function UnitMesh({
     const target = drawersOpen || unit.drawersOpen ? 1 : 0;
     drawerProgress.current = THREE.MathUtils.damp(drawerProgress.current, target, 9, dt);
     drawerGroups.current.forEach((group, index) => {
-      if (group) group.position.z = drawerFrontZ + 0.18 * drawerProgress.current * (index + 1);
+      if (group) {
+        group.position.z =
+          drawerFrontZ +
+          (assemblyView ? 0.16 : 0) +
+          0.18 * drawerProgress.current * (index + 1);
+      }
     });
   });
   const fittings = useMemo(() => fittingsOf(unit), [unit]);
   const appliances = unit.appliances ?? [];
+  const sinkAppliance = appliances.find((appliance) => appliance.type === "sink");
+  const hobAppliance = appliances.find((appliance) => appliance.type === "hob");
   const base = innerBase(unit) / 100;
   const innerH = innerHeight(unit) / 100;
   const applianceOccupiesFront = appliances.some((appliance) => isFrontAppliance(appliance.type));
+  const sinkFaucetX = sinkAppliance
+    ? Math.max(-(W / 2 - 0.12), Math.min(W / 2 - 0.12, (sinkAppliance.x ?? 0) / 100))
+    : 0;
+  const sinkBase = unit.mount === "base" && !!sinkAppliance;
+  const sinkBaseFront = sinkBase && unit.front !== "none" && unit.front !== "drawers";
+  const frontSpecUnit: Unit = sinkBaseFront
+    ? { ...unit, front: "double", frontLeaves: 2 }
+    : unit;
+  const frontLeafCount = leafCount(frontSpecUnit);
+  const sinkDoorsOpen =
+    sinkBaseFront &&
+    (assemblyView || !!unit.open || Object.values(unit.leaves ?? {}).some((leaf) => !!leaf.open));
   const hasFront = unit.front !== "none" && !applianceOccupiesFront;
   const handleY = Math.min(
     unit.h - 8,
     Math.max(plinth * 100 + 8, unit.handleY ?? Math.min(unit.h - 20, 100)),
   );
+  const activeAssemblyStep = selected ? assemblyStepKind : null;
+  const showCarcass = assemblyStageVisible(activeAssemblyStep, "carcass");
+  const showBack = assemblyStageVisible(activeAssemblyStep, "back");
+  const showBase = assemblyStageVisible(activeAssemblyStep, "base");
+  const showInterior = assemblyStageVisible(activeAssemblyStep, "interior");
+  const showDrawers = assemblyStageVisible(activeAssemblyStep, "drawers");
+  const showFronts = assemblyStageVisible(activeAssemblyStep, "fronts");
+  const showServices = assemblyStageVisible(activeAssemblyStep, "services");
+  const wallFixingRequired =
+    unit.mount === "wall" ||
+    unit.mount === "tall" ||
+    (unit.y ?? 0) > 0 ||
+    (unit.mount === "base" && unit.drawers >= 2);
+  const showWallFixing =
+    assemblyView && wallFixingRequired && (!activeAssemblyStep || activeAssemblyStep === "final");
   const controls = useThree((s) => s.controls) as { enabled: boolean } | null;
 
   /**
@@ -885,69 +1199,92 @@ const UnitMesh = memo(function UnitMesh({
         );
       }}
     >
-      {plinth > 0 && (
-        <Panel
-          size={[W - 0.02, plinth, D - 0.04]}
-          position={[0, plinth / 2, 0]}
-          color="#7d7a74"
-          roughness={0.9}
-        />
+      {activeAssemblyStep === "prepare" && (
+        <group>
+          <mesh position={[0, H / 2, 0]} raycast={() => null}>
+            <boxGeometry args={[W, H, D]} />
+            <meshBasicMaterial color="#6f9c82" wireframe transparent opacity={0.32} />
+          </mesh>
+          <Html center position={[0, H + 0.12, D / 2 + 0.04]} distanceFactor={5}>
+            <span className="whitespace-nowrap rounded-full border border-primary/50 bg-card/90 px-2 py-0.5 text-[10px] font-semibold text-primary shadow-sm backdrop-blur-sm">
+              Step 1 · Lay out parts
+            </span>
+          </Html>
+        </group>
       )}
+      {showWallFixing && <WallFixingVisual width={W} height={H} depth={D} />}
+      {showBase && plinth > 0 &&
+        (sinkBase ? (
+          <SinkBaseFoundation width={W} depth={D} height={plinth} />
+        ) : (
+          <Panel
+            size={[W - 0.02, plinth, D - 0.04]}
+            position={[0, plinth / 2, 0]}
+            color="#7d7a74"
+            roughness={0.9}
+          />
+        ))}
       {/* sides */}
-      <Panel
-        size={[P, leftBody, D]}
-        position={[-W / 2 + P / 2, plinth + leftBody / 2, 0]}
-        color={f.hex}
-        roughness={f.roughness}
-      />
-      <Panel
-        size={[P, rightBody, D]}
-        position={[W / 2 - P / 2, plinth + rightBody / 2, 0]}
-        color={f.hex}
-        roughness={f.roughness}
-      />
-      {/* top + bottom */}
-      <Panel
-        size={[inner, P, D]}
-        position={[0, plinth + P / 2, 0]}
-        color={f.hex}
-        roughness={f.roughness}
-      />
-      {unit.underStairs ? (
-        <mesh
-          position={[0, (leftTop + rightTop) / 2 - P / 2, 0]}
-          rotation={[0, 0, topAngle]}
-          castShadow
-          receiveShadow
-        >
-          <boxGeometry args={[topLength, P, D]} />
-          <meshStandardMaterial color={f.hex} roughness={f.roughness} />
-        </mesh>
-      ) : (
-        <Panel
-          size={[inner, P, D]}
-          position={[0, H - P / 2, 0]}
-          color={f.hex}
-          roughness={f.roughness}
-        />
+      {showCarcass && (
+        <>
+          <Panel
+            size={[P, leftBody, D]}
+            position={[-W / 2 + P / 2, plinth + leftBody / 2, 0]}
+            color={f.hex}
+            roughness={f.roughness}
+          />
+          <Panel
+            size={[P, rightBody, D]}
+            position={[W / 2 - P / 2, plinth + rightBody / 2, 0]}
+            color={f.hex}
+            roughness={f.roughness}
+          />
+          {/* top + bottom */}
+          <Panel
+            size={[inner, P, D]}
+            position={[0, plinth + P / 2, 0]}
+            color={f.hex}
+            roughness={f.roughness}
+          />
+          {unit.underStairs ? (
+            <mesh
+              position={[0, (leftTop + rightTop) / 2 - P / 2, 0]}
+              rotation={[0, 0, topAngle]}
+              castShadow
+              receiveShadow
+            >
+              <boxGeometry args={[topLength, P, D]} />
+              <meshStandardMaterial color={f.hex} roughness={f.roughness} />
+            </mesh>
+          ) : (
+            <Panel
+              size={[inner, P, D]}
+              position={[0, H - P / 2, 0]}
+              color={f.hex}
+              roughness={f.roughness}
+            />
+          )}
+        </>
       )}
       {/* back */}
-      {unit.underStairs ? (
+      {showBack && unit.underStairs ? (
         <mesh position={[0, plinth, -D / 2 + 0.006]} receiveShadow>
           <extrudeGeometry args={[backShape, { depth: 0.008, bevelEnabled: false }]} />
           <meshStandardMaterial color={f.hex} roughness={0.85} />
         </mesh>
-      ) : (
+      ) : showBack ? (
         <Panel
           size={[inner, body, 0.008]}
           position={[0, plinth + body / 2, -D / 2 + 0.006]}
           color={f.hex}
           roughness={0.85}
         />
-      )}
+      ) : null}
       {/* interior fittings on the 32 mm hole matrix */}
-      {fittings.map((fit) => {
+      {showInterior && fittings.map((fit) => {
         const meta = FITTING_META[fit.type];
+        const fittingStage = fit.type === "drawer" ? "drawers" : "interior";
+        if (!assemblyStageVisible(activeAssemblyStep, fittingStage)) return null;
         const y = base + (fit.y + meta.height / 2) / 100;
         const active = interior.selectedFitting === fit.id;
         const pick = (e: ThreeEvent<PointerEvent>) => {
@@ -1106,7 +1443,7 @@ const UnitMesh = memo(function UnitMesh({
           </group>
         );
       })}
-      {appliances.map((appliance) => {
+      {showServices && appliances.map((appliance) => {
         const applianceHeight = Math.min(ITEM_META[appliance.type].height, innerHeight(unit));
         const y = base + appliance.y / 100 + applianceHeight / 200;
         const applianceWidth = Math.max(0.2, W - 0.09);
@@ -1119,41 +1456,34 @@ const UnitMesh = memo(function UnitMesh({
         if (appliance.type === "sink" || appliance.type === "hob") {
           const isSink = appliance.type === "sink";
           return (
-            <group key={appliance.id} position={[applianceX, kitchenTop + 0.012, 0]}>
-              <Panel
-                size={[
-                  Math.max(0.34, Math.min(0.68, W - 0.16)),
-                  0.025,
-                  Math.max(0.34, Math.min(0.58, D - 0.16)),
-                ]}
-                position={[0, 0, 0]}
-                color={isSink ? "#aeb9bb" : "#17191a"}
-                roughness={isSink ? 0.28 : 0.2}
-              />
+            <group key={appliance.id} position={[applianceX, kitchenTop + 0.047, 0]}>
               {isSink ? (
-                <Panel
-                  size={[
-                    Math.max(0.24, Math.min(0.5, W - 0.3)),
-                    0.018,
-                    Math.max(0.22, Math.min(0.42, D - 0.28)),
-                  ]}
-                  position={[0, 0.018, 0]}
-                  color="#657174"
-                  roughness={0.25}
-                />
+                <KitchenSinkVisual width={W} depth={D} />
               ) : (
-                [-0.16, 0.16].flatMap((x) =>
-                  [-0.13, 0.13].map((z) => (
-                    <mesh
-                      key={`${x}-${z}`}
-                      position={[x, 0.026, z]}
-                      rotation={[-Math.PI / 2, 0, 0]}
-                    >
-                      <torusGeometry args={[0.055, 0.008, 12, 24]} />
-                      <meshStandardMaterial color="#64686a" metalness={0.55} roughness={0.26} />
-                    </mesh>
-                  )),
-                )
+                <>
+                  <Panel
+                    size={[
+                      Math.max(0.34, Math.min(0.68, W - 0.16)),
+                      0.025,
+                      Math.max(0.34, Math.min(0.58, D - 0.16)),
+                    ]}
+                    position={[0, 0, 0]}
+                    color="#17191a"
+                    roughness={0.2}
+                  />
+                  {[-0.16, 0.16].flatMap((x) =>
+                    [-0.13, 0.13].map((z) => (
+                      <mesh
+                        key={`${x}-${z}`}
+                        position={[x, 0.026, z]}
+                        rotation={[-Math.PI / 2, 0, 0]}
+                      >
+                        <torusGeometry args={[0.055, 0.008, 12, 24]} />
+                        <meshStandardMaterial color="#64686a" metalness={0.55} roughness={0.26} />
+                      </mesh>
+                    )),
+                  )}
+                </>
               )}
             </group>
           );
@@ -1179,19 +1509,21 @@ const UnitMesh = memo(function UnitMesh({
           </group>
         );
       })}
-      {unit.countertop && !unit.underStairs && (
-        <Panel
-          size={[W + 0.04, 0.045, D + 0.06]}
-          position={[0, H + 0.022, 0]}
-          color={
-            unit.countertopMaterial === "wood"
-              ? "#b98a58"
-              : unit.countertopMaterial === "laminate"
-                ? "#d9d1c4"
-                : "#8c9390"
-          }
-          roughness={unit.countertopMaterial === "stone" ? 0.3 : 0.6}
-        />
+      {showServices && unit.countertop && !unit.underStairs && (
+        <group position={[0, H + 0.022, 0]}>
+          <KitchenWorktopVisual
+            width={W}
+            depth={D}
+            material={unit.countertopMaterial ?? "stone"}
+            appliance={
+              sinkAppliance
+                ? { type: "sink", x: sinkAppliance.x }
+                : hobAppliance
+                  ? { type: "hob", x: hobAppliance.x }
+                  : undefined
+            }
+          />
+        </group>
       )}
       {invalid && showDimensions && (
         <>
@@ -1206,7 +1538,7 @@ const UnitMesh = memo(function UnitMesh({
           </Html>
         </>
       )}
-      {unit.backsplash && unit.countertop && !unit.underStairs && (
+      {showServices && unit.backsplash && unit.countertop && !unit.underStairs && (
         <Panel
           size={[W + 0.04, (unit.backsplashHeight ?? 60) / 100, 0.025]}
           position={[0, H + 0.045 + (unit.backsplashHeight ?? 60) / 200, -D / 2 - 0.014]}
@@ -1220,14 +1552,27 @@ const UnitMesh = memo(function UnitMesh({
           roughness={unit.countertopMaterial === "stone" ? 0.36 : 0.58}
         />
       )}
-      {unit.faucet && !unit.underStairs && (
-        <group position={[0, H + 0.045, D * 0.18]}>
-          <mesh position={[0, 0.09, 0]} castShadow>
-            <cylinderGeometry args={[0.014, 0.014, 0.18, 16]} />
+      {showServices && sinkDoorsOpen && <SinkPlumbingVisual width={W} height={H} depth={D} />}
+      {showServices && unit.faucet && !unit.underStairs && (
+        <group position={[sinkFaucetX, H + 0.046, -D * 0.3]}>
+          <mesh position={[0, 0.006, 0]} castShadow>
+            <cylinderGeometry args={[0.025, 0.025, 0.012, 20]} />
             <meshStandardMaterial color="#a9b1b3" metalness={0.9} roughness={0.18} />
           </mesh>
-          <mesh position={[0.045, 0.17, 0]} rotation={[0, 0, Math.PI / 2]} castShadow>
-            <cylinderGeometry args={[0.014, 0.014, 0.09, 16]} />
+          <mesh position={[0, 0.085, 0]} castShadow>
+            <cylinderGeometry args={[0.012, 0.016, 0.15, 20]} />
+            <meshStandardMaterial color="#a9b1b3" metalness={0.9} roughness={0.18} />
+          </mesh>
+          <mesh position={[0, 0.158, 0.045]} rotation={[Math.PI / 2, 0, 0]} castShadow>
+            <cylinderGeometry args={[0.012, 0.012, 0.09, 20]} />
+            <meshStandardMaterial color="#a9b1b3" metalness={0.9} roughness={0.18} />
+          </mesh>
+          <mesh position={[0, 0.128, 0.09]} castShadow>
+            <cylinderGeometry args={[0.011, 0.011, 0.06, 20]} />
+            <meshStandardMaterial color="#a9b1b3" metalness={0.9} roughness={0.18} />
+          </mesh>
+          <mesh position={[0.035, 0.128, 0]} rotation={[0, 0, Math.PI / 4]} castShadow>
+            <cylinderGeometry args={[0.007, 0.007, 0.05, 16]} />
             <meshStandardMaterial color="#a9b1b3" metalness={0.9} roughness={0.18} />
           </mesh>
         </group>
@@ -1256,7 +1601,7 @@ const UnitMesh = memo(function UnitMesh({
       )}
 
       {/* fronts */}
-      {unit.drawers > 0 &&
+      {showDrawers && unit.drawers > 0 &&
         !applianceOccupiesFront &&
         Array.from({ length: Math.max(1, unit.drawers || 3) }, (_, i) => {
           const n = Math.max(1, unit.drawers || 3);
@@ -1273,7 +1618,7 @@ const UnitMesh = memo(function UnitMesh({
               }}
               position={[0, faceY, drawerFrontZ]}
             >
-              {(drawersOpen || unit.drawersOpen) && (
+              {(drawersOpen || unit.drawersOpen || assemblyView) && (
                 <>
                   {/* The open drawer is a real shallow box, not just a floating slab. */}
                   <mesh position={[0, -dh * 0.34, -D * 0.28]}>
@@ -1314,31 +1659,35 @@ const UnitMesh = memo(function UnitMesh({
                   </mesh>
                 </>
               )}
-              <Panel
-                size={[W - 0.008, dh, 0.026]}
-                position={[0, 0, 0]}
-                color={f.hex}
-                roughness={f.roughness}
-              />
-              <mesh position={[0, -dh / 2 + 0.006, 0.018]}>
-                <boxGeometry args={[Math.max(0.12, W - 0.08), 0.008, 0.006]} />
-                <meshStandardMaterial color="#756b63" roughness={0.72} />
-              </mesh>
-              <mesh position={[0, 0, 0.018]} castShadow>
-                <boxGeometry args={[Math.min(0.28, W * 0.42), 0.018, 0.022]} />
-                <meshStandardMaterial color="#9aa2a6" metalness={0.9} roughness={0.25} />
-              </mesh>
+              {showFronts && (
+                <>
+                  <Panel
+                    size={[W - 0.008, dh, 0.026]}
+                    position={[0, 0, 0]}
+                    color={f.hex}
+                    roughness={f.roughness}
+                  />
+                  <mesh position={[0, -dh / 2 + 0.006, 0.018]}>
+                    <boxGeometry args={[Math.max(0.12, W - 0.08), 0.008, 0.006]} />
+                    <meshStandardMaterial color="#756b63" roughness={0.72} />
+                  </mesh>
+                  <mesh position={[0, 0, 0.018]} castShadow>
+                    <boxGeometry args={[Math.min(0.28, W * 0.42), 0.018, 0.022]} />
+                    <meshStandardMaterial color="#9aa2a6" metalness={0.9} roughness={0.25} />
+                  </mesh>
+                </>
+              )}
             </group>
           );
         })}
-      {!applianceOccupiesFront &&
-        (unit.front === "door" || unit.front === "double") &&
-        Array.from({ length: leafCount(unit) }, (_, li) => li).flatMap((li) => {
-          const leaves = leafCount(unit);
+      {showFronts && !applianceOccupiesFront &&
+        (frontSpecUnit.front === "door" || frontSpecUnit.front === "double") &&
+        Array.from({ length: frontLeafCount }, (_, li) => li).flatMap((li) => {
+          const leaves = frontLeafCount;
           const leafOffset = li - (leaves - 1) / 2;
-          const sections = Math.max(1, Math.min(3, unit.frontSections ?? 1));
+          const sections = Math.max(1, Math.min(3, frontSpecUnit.frontSections ?? 1));
           return Array.from({ length: sections }, (_, section) => {
-            const L = sectionSpec(unit, li, section);
+            const L = sectionSpec(frontSpecUnit, li, section);
             const sectionStart = frontFractions
               .slice(0, section)
               .reduce((sum, fraction) => sum + fraction, 0);
@@ -1355,14 +1704,14 @@ const UnitMesh = memo(function UnitMesh({
                 height={sectionHeight}
                 x={(leafOffset * W) / leaves}
                 y={sectionBase + sectionHeight / 2}
-                z={doorFrontZ}
+                z={doorFrontZ + (assemblyView ? 0.16 : 0)}
                 hinge={L.hinge}
-                open={L.open}
+                open={assemblyView || L.open}
                 mode={L.mode}
                 color={f.hex}
                 roughness={f.roughness}
                 material={L.material}
-                style={L.style}
+                style={sinkBase ? "framed" : L.style}
                 handle={{
                   style: L.handleStyle,
                   pos: L.handlePos,
@@ -1378,7 +1727,7 @@ const UnitMesh = memo(function UnitMesh({
             );
           });
         })}
-      {!applianceOccupiesFront &&
+      {showFronts && !applianceOccupiesFront &&
         unit.front === "glass" &&
         Array.from({ length: Math.max(1, Math.min(3, unit.frontSections ?? 1)) }, (_, section) => {
           const sections = Math.max(1, Math.min(3, unit.frontSections ?? 1));
@@ -1396,9 +1745,9 @@ const UnitMesh = memo(function UnitMesh({
               height={sectionHeight}
               x={0}
               y={sectionBase + sectionHeight / 2}
-              z={doorFrontZ}
+              z={doorFrontZ + (assemblyView ? 0.16 : 0)}
               hinge={L.hinge}
-              open={L.open}
+              open={assemblyView || L.open}
               mode={L.mode}
               color={f.hex}
               roughness={f.roughness}
@@ -1490,6 +1839,10 @@ export default function ModularScene({
   actions,
   interior,
   showDimensions,
+  panelThicknessMm = 18,
+  showGrid = true,
+  assemblyView = false,
+  assemblyStepKind = null,
   drawersOpen = false,
   invalidUnitIds = [],
 }: {
@@ -1506,6 +1859,10 @@ export default function ModularScene({
   actions: Actions;
   interior: Interior;
   showDimensions: boolean;
+  panelThicknessMm?: number;
+  showGrid?: boolean;
+  assemblyView?: boolean;
+  assemblyStepKind?: AssemblyStepKind | null;
   drawersOpen?: boolean;
   invalidUnitIds?: string[];
 }) {
@@ -1873,6 +2230,9 @@ export default function ModularScene({
                 outLeft={Math.max(0, u.x - u.w / 2 - bounds.min) / 100}
                 outRight={Math.max(0, bounds.max - (u.x + u.w / 2)) / 100}
                 showDimensions={showDimensions}
+                panelThicknessMm={panelThicknessMm}
+                assemblyView={assemblyView}
+                assemblyStepKind={selectedId === u.id ? assemblyStepKind : null}
                 drawersOpen={drawersOpen}
                 invalid={invalidUnitIds.includes(u.id)}
                 movable={armedUnitId === u.id || (selectedId === u.id && !interior.editInterior)}
@@ -1963,15 +2323,17 @@ export default function ModularScene({
             />
           </Suspense>
         )}
-        <Grid
-          args={[26, 26]}
-          cellSize={0.25}
-          cellColor="#e0dbd2"
-          sectionSize={1}
-          sectionColor="#cbc4b8"
-          fadeDistance={20}
-          infiniteGrid
-        />
+        {showGrid && (
+          <Grid
+            args={[26, 26]}
+            cellSize={0.25}
+            cellColor="#e0dbd2"
+            sectionSize={1}
+            sectionColor="#cbc4b8"
+            fadeDistance={20}
+            infiniteGrid
+          />
+        )}
       </group>
 
       <Suspense fallback={null}>

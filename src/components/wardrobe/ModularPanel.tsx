@@ -50,6 +50,8 @@ import { buildCncCutlist, cncSettings, validateCncCutlist } from "@/lib/cnc";
 import { createDxf, dxfFileName, dxfSheetFileName } from "@/lib/dxf";
 import { createCncManifestCsv } from "@/lib/cnc-manifest";
 import { createCutlistPdfHtml } from "@/lib/cutlist-pdf";
+import { buildAssemblyGuides, createAssemblyGuideHtml } from "@/lib/assembly-guide";
+import { aggregateHardware, createHardwareListCsv, HARDWARE_CATEGORY_LABELS } from "@/lib/hardware-list";
 import { downloadBlob } from "@/lib/download";
 import {
   addFitting,
@@ -63,6 +65,7 @@ import InteriorEquipment from "@/components/wardrobe/InteriorEquipment";
 import {
   PRESET_CATEGORIES,
   KITCHEN_LAYOUT_PRESETS,
+  WARDROBE_LAYOUT_PRESETS,
   unitFromPreset,
   type CabinetPreset,
   type KitchenLayoutPreset,
@@ -72,6 +75,7 @@ import {
 import {
   AlignVerticalJustifyStart,
   Boxes,
+  ClipboardCheck,
   Copy,
   Layers,
   Library,
@@ -79,6 +83,7 @@ import {
   Magnet,
   Palette,
   Plus,
+  Printer,
   Rows3,
   Sparkles,
   SquareStack,
@@ -275,7 +280,12 @@ export default function ModularPanel({
   savedKitchenLayouts,
   onSaveKitchenLayout,
   onRemoveKitchenLayout,
+  onLayoutApplied,
   onDuplicate,
+  assemblyView,
+  onToggleAssemblyView,
+  assemblyStep,
+  onAssemblyStepChange,
   editInterior,
   onToggleEditInterior,
   selectedFitting,
@@ -294,13 +304,19 @@ export default function ModularPanel({
   savedKitchenLayouts: SavedKitchenLayout[];
   onSaveKitchenLayout: (name: string) => void;
   onRemoveKitchenLayout: (id: string) => void;
+  onLayoutApplied?: (layout: KitchenLayoutPreset) => void;
   onDuplicate: (id: string) => void;
+  assemblyView: boolean;
+  onToggleAssemblyView: () => void;
+  assemblyStep: number | null;
+  onAssemblyStepChange: (step: number) => void;
   editInterior: boolean;
   onToggleEditInterior: () => void;
   selectedFitting: string | null;
   onSelectFitting: (id: string | null) => void;
 }) {
   const units = config.units;
+  const builtInLayouts = [...KITCHEN_LAYOUT_PRESETS, ...WARDROBE_LAYOUT_PRESETS];
   const sel = units.find((u) => u.id === selectedId) ?? units[0] ?? null;
   const toggleUnitSelection = (id: string) =>
     setSelectedUnitIds(
@@ -428,8 +444,9 @@ export default function ModularPanel({
         d: dimensions.depth ?? 60,
         mount: product.sku.includes("WALL") ? "wall" : "base",
         ...(role === "sink" || role === "hob" || role === "dishwasher" || role === "ovenTower"
-          ? { front: "door" as const }
+          ? { front: role === "sink" ? ("double" as const) : ("door" as const) }
           : {}),
+        ...(role === "sink" ? { doorStyle: "framed" as const } : {}),
         countertop: role === "sink" || role === "hob" || role === "dishwasher",
         faucet: role === "sink",
         appliances:
@@ -474,9 +491,12 @@ export default function ModularPanel({
         front:
           kind === "drawers"
             ? ("drawers" as const)
-            : isCorner
+            : kind === "sink"
               ? ("double" as const)
-              : ("door" as const),
+              : isCorner
+                ? ("double" as const)
+                : ("door" as const),
+        ...(kind === "sink" ? { doorStyle: "framed" as const } : {}),
         drawers: kind === "drawers" ? 3 : 0,
         ...(isCorner ? { corner: true, snap: false } : {}),
         appliances:
@@ -523,7 +543,10 @@ export default function ModularPanel({
     setConfig((c) => {
       const room =
         mode === "replace" && layout.room ? { ...c.modularRoom, ...layout.room } : c.modularRoom;
-      const isSequentialKitchen = layout.id === "kitchen-5-sketch";
+      const isSequentialKitchen =
+        layout.id === "kitchen-5-sketch" ||
+        layout.id === "photo-kitchen-linear" ||
+        layout.id === "wardrobe-5";
       const created = layout.units.map((item, index) => {
         const unit = newUnit({
           finish: c.finish,
@@ -542,6 +565,9 @@ export default function ModularPanel({
       return {
         ...c,
         ...(mode === "replace" && layout.room ? { modularRoom: room } : {}),
+        ...(mode === "replace" && layout.showDimensions !== undefined
+          ? { showDimensions: layout.showDimensions }
+          : {}),
         units: created.reduce(
           (all, unit) => [
             ...all,
@@ -552,6 +578,7 @@ export default function ModularPanel({
       };
     });
     setSelectedId(firstId);
+    onLayoutApplied?.(layout);
     toast.success(`${layout.name} added`);
   };
 
@@ -626,6 +653,21 @@ export default function ModularPanel({
 
   const cnc = cncSettings(config);
   const cutlist = buildCncCutlist(config);
+  const hardwareList = aggregateHardware(cutlist.hardware);
+  const selectedAssembly = sel
+    ? cutlist.assemblies.find((assembly) => assembly.unitId === sel.id)
+    : undefined;
+  const assemblyGuides = buildAssemblyGuides(cutlist.assemblies);
+  const selectedAssemblyGuide = sel
+    ? assemblyGuides.find((guide) => guide.unitId === sel.id)
+    : undefined;
+  const assemblyStepIndex = selectedAssemblyGuide
+    ? Math.min(
+        selectedAssemblyGuide.steps.length - 1,
+        Math.max(0, assemblyStep ?? 0),
+      )
+    : 0;
+  const activeAssemblyStep = selectedAssemblyGuide?.steps[assemblyStepIndex];
   const cncIssues = validateCncCutlist(cutlist);
   const cncErrors = cncIssues.filter((issue) => issue.severity === "error");
   const cncReady = cncErrors.length === 0 && cutlist.oversized.length === 0;
@@ -686,6 +728,70 @@ export default function ModularPanel({
     report.focus();
     report.setTimeout(() => report.print(), 300);
   };
+  const printAssemblyGuides = (selectedOnly = false) => {
+    const guides = selectedOnly && selectedAssemblyGuide ? [selectedAssemblyGuide] : assemblyGuides;
+    if (!guides.length) {
+      toast.error("No assembly guides", {
+        description: "Add at least one cabinet before printing assembly instructions.",
+      });
+      return;
+    }
+    const report = window.open("", "_blank", "noopener,noreferrer,width=1000,height=900");
+    if (!report) return;
+    report.document.write(
+      createAssemblyGuideHtml(guides, cutlist.assemblies, projectName.trim() || "Project"),
+    );
+    report.document.close();
+    report.focus();
+    report.setTimeout(() => report.print(), 300);
+  };
+  const downloadConstructionPackage = () => {
+    if (!cutlist.assemblies.length) {
+      toast.error("No cabinet assemblies", {
+        description: "Add at least one cabinet before exporting the technical package.",
+      });
+      return;
+    }
+    const name = projectName.trim() || "Project";
+    const payload = {
+      schema: "mobila-construction-v1",
+      projectName: name,
+      settings: cutlist.settings,
+      assemblies: cutlist.assemblies,
+      assemblyGuides,
+      panels: cutlist.parts,
+      hardware: cutlist.hardware,
+      hardwareList,
+      nesting: cutlist.sheets,
+      oversized: cutlist.oversized,
+      unsupported: cutlist.unsupported,
+      camReviewReasons: cutlist.camReviewReasons,
+    };
+    downloadBlob(
+      new Blob([JSON.stringify(payload, null, 2)], { type: "application/json" }),
+      `${name.replace(/[^a-z0-9-_]+/gi, "_") || "project"}-construction.json`,
+    );
+    toast.success("Technical package exported", {
+      description: "Includes assemblies, panels, operations, hardware and CNC nesting.",
+    });
+  };
+  const downloadHardwareList = () => {
+    if (!hardwareList.length) {
+      toast.error("No hardware items", {
+        description: "Add a cabinet, fitting or appliance before exporting the hardware list.",
+      });
+      return;
+    }
+    const name = projectName.trim() || "Project";
+    downloadBlob(
+      new Blob([createHardwareListCsv(hardwareList, name)], { type: "text/csv;charset=utf-8" }),
+      `${name.replace(/[^a-z0-9-_]+/gi, "_") || "project"}-hardware-list.csv`,
+    );
+    toast.success("Hardware list exported", {
+      description: "Quantities are grouped across the complete project.",
+    });
+  };
+
   const downloadCncManifest = () => {
     if (!cutlist.parts.length) {
       toast.error("Nu există piese CNC / No CNC parts", {
@@ -816,6 +922,66 @@ export default function ModularPanel({
                     onCheckedChange={(value) => setConfig((c) => ({ ...c, openDrawers: value }))}
                   />
                 </div>
+                <div className="mt-2 flex items-center justify-between gap-3 rounded-lg border border-border bg-background/70 px-2.5 py-2">
+                  <span className="text-xs font-medium text-foreground">Assembly preview</span>
+                  <Switch checked={assemblyView} onCheckedChange={onToggleAssemblyView} />
+                </div>
+                {assemblyView && activeAssemblyStep && selectedAssemblyGuide && (
+                  <div className="mt-2 space-y-2 rounded-lg border border-primary/30 bg-background/70 p-2.5">
+                    <div className="flex items-center justify-between gap-2">
+                      <span className="text-[10px] font-semibold uppercase tracking-[0.12em] text-primary">
+                        Interactive assembly
+                      </span>
+                      <span className="text-[10px] tabular-nums text-muted-foreground">
+                        Step {activeAssemblyStep.number}/{selectedAssemblyGuide.steps.length}
+                      </span>
+                    </div>
+                    <div className="flex items-center gap-1.5">
+                      <Button
+                        type="button"
+                        variant="outline"
+                        size="sm"
+                        className="h-8 flex-1 rounded-lg px-2 text-[10px]"
+                        disabled={assemblyStepIndex <= 0}
+                        onClick={() => onAssemblyStepChange(assemblyStepIndex - 1)}
+                      >
+                        Previous
+                      </Button>
+                      <Button
+                        type="button"
+                        variant="outline"
+                        size="sm"
+                        className="h-8 flex-1 rounded-lg px-2 text-[10px]"
+                        disabled={assemblyStepIndex >= selectedAssemblyGuide.steps.length - 1}
+                        onClick={() => onAssemblyStepChange(assemblyStepIndex + 1)}
+                      >
+                        Next
+                      </Button>
+                    </div>
+                    <div>
+                      <div className="text-xs font-semibold text-foreground">{activeAssemblyStep.title}</div>
+                      <p className="mt-0.5 text-[10px] leading-4 text-muted-foreground">
+                        {activeAssemblyStep.description}
+                      </p>
+                    </div>
+                    <div className="space-y-0.5 text-[10px] text-muted-foreground">
+                      {activeAssemblyStep.checks.slice(0, 2).map((check) => (
+                        <div key={check}>• {check}</div>
+                      ))}
+                    </div>
+                  </div>
+                )}
+                {assemblyView && !selectedAssemblyGuide && (
+                  <p className="mt-2 rounded-lg bg-amber-50 p-2 text-[10px] leading-4 text-amber-800">
+                    Select a cabinet to start the interactive assembly steps.
+                  </p>
+                )}
+                {assemblyView && (
+                  <p className="rounded-lg bg-primary/10 p-2 text-[10px] leading-4 text-muted-foreground">
+                    Use Previous and Next to add each construction layer in 3D. Doors and drawers
+                    open automatically when their assembly stage is reached.
+                  </p>
+                )}
               </div>
             )}
           </AccordionContent>
@@ -1103,6 +1269,19 @@ export default function ModularPanel({
                   ["sheetMargin", "Sheet margin", 0, 100],
                   ["sheetWidth", "Sheet width", 100, 5000],
                   ["sheetHeight", "Sheet height", 100, 5000],
+                  ["edgeBandThickness", "Edge band", 0, 5],
+                  ["holeDiameter", "System hole", 1, 20],
+                  ["holeDepth", "Hole depth", 1, 30],
+                  ["holePitch", "Hole pitch", 1, 100],
+                  ["holeOffset", "Hole offset", 1, 100],
+                  ["backRebateWidth", "Back rebate", 1, 30],
+                  ["backRebateDepth", "Rebate depth", 1, 30],
+                  ["hingeCupDiameter", "Hinge cup", 1, 50],
+                  ["hingeCupDepth", "Cup depth", 1, 30],
+                  ["hingeOffset", "Hinge offset", 1, 200],
+                  ["connectorDiameter", "Connector pilot", 1, 20],
+                  ["connectorDepth", "Connector depth", 1, 50],
+                  ["countertopThickness", "Worktop thickness", 1, 80],
                 ] as const
               ).map(([key, label, min, max]) => (
                 <label key={key} className="space-y-1 text-[10px] text-muted-foreground">
@@ -1119,16 +1298,66 @@ export default function ModularPanel({
                 </label>
               ))}
             </div>
+            <label className="block space-y-1 text-[10px] text-muted-foreground">
+              Joinery system
+              <select
+                value={cnc.joinery}
+                onChange={(event) =>
+                  setConfig((c) => ({
+                    ...c,
+                    cnc: {
+                      ...cncSettings(c),
+                      joinery: event.target.value as "confirmat" | "cam-dowel" | "dowel",
+                    },
+                  }))
+                }
+                className="w-full rounded-lg border border-border bg-background px-2 py-1.5 text-xs text-foreground outline-none focus:border-primary"
+              >
+                <option value="confirmat">Confirmat pilot</option>
+                <option value="cam-dowel">Cam + dowel</option>
+                <option value="dowel">Dowel</option>
+              </select>
+            </label>
             <p className="rounded-lg border border-dashed border-primary/30 bg-accent/30 p-2 text-[10px] text-muted-foreground">
               Values are in millimetres. Zero or empty values automatically use the standard
-              defaults.
+              defaults. Operations are nominal and must be checked in CAM before machining.
             </p>
             <div className="grid grid-cols-2 gap-2 text-[11px] text-muted-foreground">
               <span>{cutlist.parts.length} parts</span>
               <span>{cutlist.sheets.length} sheets</span>
               <span>{cutlist.totalAreaM2.toFixed(2)} m² total</span>
-              <span>Joinery compensated for {cnc.panelThickness} mm board</span>
-            </div>
+              <span>{cutlist.hardware.length} hardware records</span>
+              <span>
+                {cutlist.parts.reduce((sum, item) => sum + (item.operations?.length ?? 0), 0)} CNC operations
+              </span>
+                <span>{cnc.joinery} · {cnc.panelThickness} mm board</span>
+              </div>
+            {hardwareList.length > 0 && (
+              <details className="rounded-lg border border-border bg-background/70 p-2 text-[10px]">
+                <summary className="cursor-pointer font-semibold text-foreground">
+                  Hardware shopping list ({hardwareList.length} lines · {hardwareList.reduce((sum, item) => sum + item.quantity, 0)} items)
+                </summary>
+                <div className="mt-2 space-y-1.5">
+                  {hardwareList.map((item) => (
+                    <div key={item.key} className="rounded-md border border-border/70 bg-card px-2 py-1.5">
+                      <div className="flex items-start justify-between gap-2">
+                        <span className="font-medium text-foreground">{item.label}</span>
+                        <span className="shrink-0 font-semibold text-foreground">×{item.quantity}</span>
+                      </div>
+                      <div className="mt-0.5 text-muted-foreground">
+                        {HARDWARE_CATEGORY_LABELS[item.category]} · {item.cabinets.join(" · ")}
+                      </div>
+                      {Object.keys(item.specs).length > 0 && (
+                        <div className="mt-0.5 text-muted-foreground">
+                          {Object.entries(item.specs).map(([key, value]) => `${key}: ${value}`).join(" · ")}
+                        </div>
+                      )}
+                      {item.notes.length > 0 && <div className="mt-0.5 text-amber-700">{item.notes.join(" ")}</div>}
+                    </div>
+                  ))}
+                </div>
+              </details>
+            )}
             {cutlist.sheets.length > 0 && (
               <div className="space-y-1.5 rounded-lg border border-border bg-background/70 p-2 text-[10px]">
                 <div className="font-semibold text-foreground">Automatic plate allocation</div>
@@ -1256,11 +1485,39 @@ export default function ModularPanel({
               >
                 Export Aspire manifest (CSV)
               </Button>
+              <Button
+                type="button"
+                variant="outline"
+                className="rounded-xl"
+                onClick={downloadConstructionPackage}
+                disabled={!cutlist.assemblies.length}
+              >
+                Export technical package (JSON)
+              </Button>
+              <Button
+                type="button"
+                variant="outline"
+                className="gap-2 rounded-xl"
+                onClick={() => printAssemblyGuides()}
+                disabled={!assemblyGuides.length}
+              >
+                <Printer className="size-4" />
+                Print assembly guides
+              </Button>
+              <Button
+                type="button"
+                variant="outline"
+                className="rounded-xl"
+                onClick={downloadHardwareList}
+                disabled={!hardwareList.length}
+              >
+                Export hardware list (CSV)
+              </Button>
             </div>
             <p className="rounded-lg border border-dashed border-sky-300/70 bg-sky-50/70 p-2 text-[10px] leading-4 text-sky-800">
-              DXF = geometria panourilor · CSV = trasabilitate placă/dulap/piesă · PDF = control
-              uman. Codul CNC final și traseele se generează în Aspire cu profilul și
-              postprocessorul utilajului.
+              DXF = contururi + marcaje operații · CSV = trasabilitate placă/dulap/piesă · PDF =
+              control uman. Codul CNC final și traseele se generează în Aspire cu profilul și
+              postprocesorul utilajului.
             </p>
           </AccordionContent>
         </AccordionItem>
@@ -1794,6 +2051,159 @@ export default function ModularPanel({
           </AccordionItem>
         )}
 
+        {sel && selectedAssembly && (
+          <AccordionItem
+            value="construction"
+            className={`panel-card border-none px-4 ${step !== "finishes" ? "hidden" : ""}`}
+          >
+            <AccordionTrigger className="hover:no-underline">
+              <span className="flex items-center gap-2">
+                <Boxes className="size-4 text-primary" />
+                <span className="label-eyebrow">Technical construction</span>
+              </span>
+            </AccordionTrigger>
+            <AccordionContent className="space-y-3 pb-4">
+              <div className="grid grid-cols-2 gap-2 rounded-xl border border-primary/25 bg-accent/30 p-3 text-[11px] text-muted-foreground">
+                <span>
+                  Assembly: <strong className="text-foreground">{selectedAssembly.cabinet}</strong>
+                </span>
+                <span>
+                  Joinery: <strong className="text-foreground">{selectedAssembly.joinery}</strong>
+                </span>
+                <span>
+                  {selectedAssembly.dimensions.width.toFixed(0)} × {selectedAssembly.dimensions.height.toFixed(0)} × {selectedAssembly.dimensions.depth.toFixed(0)} mm
+                </span>
+                <span>
+                  {selectedAssembly.parts.length} panels · {selectedAssembly.hardware.length} hardware records
+                </span>
+              </div>
+
+              {selectedAssemblyGuide && (
+                <div className="space-y-2 rounded-xl border border-primary/25 bg-background/70 p-3">
+                  <div className="flex items-start justify-between gap-3">
+                    <div>
+                      <div className="flex items-center gap-1.5 text-[11px] font-semibold text-foreground">
+                        <ClipboardCheck className="size-3.5 text-primary" />
+                        Assembly sequence
+                      </div>
+                      <p className="mt-0.5 text-[10px] text-muted-foreground">
+                        {selectedAssemblyGuide.steps.length} steps · estimated {selectedAssemblyGuide.estimatedMinutes} min
+                      </p>
+                    </div>
+                    <Button
+                      type="button"
+                      variant="outline"
+                      size="sm"
+                      className="h-8 shrink-0 gap-1.5 rounded-lg px-2 text-[10px]"
+                      onClick={() => printAssemblyGuides(true)}
+                    >
+                      <Printer className="size-3.5" />
+                      Print guide
+                    </Button>
+                  </div>
+                  <div className="space-y-1.5">
+                    {selectedAssemblyGuide.steps.map((step) => (
+                      <div
+                        key={step.id}
+                        className="flex gap-2 rounded-lg border border-border bg-card/70 px-2.5 py-2"
+                      >
+                        <span className="flex size-5 shrink-0 items-center justify-center rounded-full bg-primary/10 text-[10px] font-semibold text-primary">
+                          {step.number}
+                        </span>
+                        <div className="min-w-0">
+                          <div className="text-[10px] font-semibold text-foreground">{step.title}</div>
+                          <p className="mt-0.5 text-[10px] leading-4 text-muted-foreground">
+                            {step.description}
+                          </p>
+                          <div className="mt-1 flex flex-wrap gap-x-2 gap-y-0.5 text-[9px] text-muted-foreground">
+                            {step.partIds.length > 0 && <span>{step.partIds.length} parts</span>}
+                            {step.hardwareIds.length > 0 && <span>{step.hardwareIds.length} hardware groups</span>}
+                            <span>{step.checks.length} checks</span>
+                          </div>
+                        </div>
+                      </div>
+                    ))}
+                  </div>
+                </div>
+              )}
+
+              <div className="space-y-1.5">
+                <div className="label-eyebrow">Panels and operations</div>
+                <div className="max-h-80 space-y-1.5 overflow-y-auto pr-1">
+                  {selectedAssembly.parts.map((part) => {
+                    const operationCounts = (part.operations ?? []).reduce<Record<string, number>>(
+                      (counts, operation) => ({
+                        ...counts,
+                        [operation.kind]: (counts[operation.kind] ?? 0) + 1,
+                      }),
+                      {},
+                    );
+                    const edgeBand = part.edgeBand
+                      ? `${part.edgeBand.sides.join("+")} · ${part.edgeBand.thickness.toFixed(1)} mm`
+                      : "raw edge";
+                    return (
+                      <div
+                        key={part.id}
+                        className="rounded-lg border border-border bg-card/70 px-2.5 py-2 text-[10px]"
+                      >
+                        <div className="flex items-start justify-between gap-2">
+                          <span className="font-medium text-foreground">{part.label}</span>
+                          <span className="shrink-0 text-muted-foreground">{part.kind ?? "panel"}</span>
+                        </div>
+                        <div className="mt-0.5 text-muted-foreground">
+                          {part.width.toFixed(1)} × {part.height.toFixed(1)} × {part.thickness.toFixed(1)} mm · {part.material ?? "board"}
+                        </div>
+                        <div className="mt-0.5 flex flex-wrap gap-x-2 gap-y-0.5 text-muted-foreground">
+                          <span>edge: {edgeBand}</span>
+                          <span>
+                            ops: {Object.entries(operationCounts)
+                              .map(([kind, count]) => `${kind}:${count}`)
+                              .join(" ") || "none"}
+                          </span>
+                        </div>
+                      </div>
+                    );
+                  })}
+                </div>
+              </div>
+
+              {selectedAssembly.hardware.length > 0 && (
+                <div className="space-y-1.5">
+                  <div className="label-eyebrow">Hardware and accessories</div>
+                  <div className="space-y-1.5">
+                    {selectedAssembly.hardware.map((item) => (
+                      <div
+                        key={item.id}
+                        className="flex items-start justify-between gap-2 rounded-lg border border-border bg-card/70 px-2.5 py-2 text-[10px]"
+                      >
+                        <div>
+                          <div className="font-medium text-foreground">{item.label}</div>
+                          <div className="text-muted-foreground">
+                            {item.category} · {Object.entries(item.specs)
+                              .map(([key, value]) => `${key}: ${value}`)
+                              .join(" · ") || "standard"}
+                          </div>
+                          {item.note && <div className="mt-0.5 text-amber-700">{item.note}</div>}
+                        </div>
+                        <span className="shrink-0 font-semibold text-foreground">×{item.quantity}</span>
+                      </div>
+                    ))}
+                  </div>
+                </div>
+              )}
+
+              {selectedAssembly.warnings.length > 0 && (
+                <div className="space-y-1 rounded-lg border border-amber-300 bg-amber-50 p-2 text-[10px] text-amber-800">
+                  <div className="font-semibold">Needs technical verification</div>
+                  {selectedAssembly.warnings.map((warning) => (
+                    <div key={warning}>• {warning}</div>
+                  ))}
+                </div>
+              )}
+            </AccordionContent>
+          </AccordionItem>
+        )}
+
         {doorList.length > 0 && (
           <AccordionItem
             value="doorleaves"
@@ -2128,7 +2538,7 @@ export default function ModularPanel({
           </AccordionTrigger>
           <AccordionContent className="space-y-3 pb-4">
             <div className="space-y-2">
-              <span className="label-eyebrow">Kitchen layouts</span>
+              <span className="label-eyebrow">Kitchen &amp; wardrobe layouts</span>
               {savedKitchenLayouts.length > 0 && (
                 <div className="space-y-2 rounded-xl border border-primary/20 bg-accent/25 p-2.5">
                   <span className="label-eyebrow">My saved kitchens</span>
@@ -2172,13 +2582,16 @@ export default function ModularPanel({
                   ))}
                 </div>
               )}
-              {KITCHEN_LAYOUT_PRESETS.map((layout) => (
+              {builtInLayouts.map((layout) => (
                 <div
                   key={layout.id}
                   className="space-y-2 rounded-xl border border-primary/30 bg-accent/50 p-2.5"
                 >
                   <KitchenLayoutPreview layout={layout} />
                   <div>
+                    <span className="mb-1 inline-flex rounded-full border border-primary/25 bg-primary/5 px-1.5 py-0.5 text-[9px] font-semibold uppercase tracking-[0.1em] text-primary">
+                      {layout.category === "wardrobe" ? "Wardrobe / Dressing" : "Kitchen"}
+                    </span>
                     <span className="block text-xs font-medium text-foreground">{layout.name}</span>
                     <span className="mt-0.5 block text-[10px] text-muted-foreground">
                       {layout.description}

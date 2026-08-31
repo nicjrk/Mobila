@@ -1,9 +1,12 @@
 import { useMemo } from "react";
+import { TechnicalDimension } from "./TechnicalDimension";
 import { planItems, type PlanItem } from "@/lib/plan";
+import { fittingsOf } from "@/lib/fittings";
 import {
   doorPartsOf,
   doorModeOf,
   FINISHES,
+  frontSectionFractions,
   leafCount,
   leafSpec,
   type Config,
@@ -11,13 +14,15 @@ import {
 } from "@/lib/wardrobe";
 
 const SCALE = 2.2;
+const cm = (value: number) => `${Math.round(value * 10) / 10} cm`;
 
 function bounds(items: PlanItem[]) {
-  if (!items.length) return { minX: -120, maxX: 120, maxH: 220 };
+  if (!items.length) return { minX: -120, maxX: 120, minH: -35, maxH: 220 };
   return {
     minX: Math.min(...items.map((item) => item.x - item.width / 2)) - 45,
     maxX: Math.max(...items.map((item) => item.x + item.width / 2)) + 45,
-    maxH: Math.max(...items.map((item) => item.height), 220) + 35,
+    minH: -35,
+    maxH: Math.max(...items.map((item) => item.elevation + item.height), 220) + 35,
   };
 }
 
@@ -52,9 +57,17 @@ export default function FrontView({
   );
   const frame = useMemo(() => bounds(items), [items]);
   const width = (frame.maxX - frame.minX) * SCALE;
-  const height = frame.maxH * SCALE;
+  const height = (frame.maxH - frame.minH) * SCALE;
   const toX = (x: number) => (x - frame.minX) * SCALE;
   const toY = (y: number) => (frame.maxH - y) * SCALE;
+  const selectedItem = items.find((item) => item.selected) ?? null;
+  const itemMinX = items.length
+    ? Math.min(...items.map((item) => item.x - item.width / 2))
+    : frame.minX + 45;
+  const itemMaxX = items.length
+    ? Math.max(...items.map((item) => item.x + item.width / 2))
+    : frame.maxX - 45;
+  const overallDimensionY = toY(0) + 26;
 
   return (
     <div className="flex h-full min-h-0 flex-col bg-[#f6f4f0] p-3">
@@ -63,7 +76,12 @@ export default function FrontView({
         <span>Click a cabinet to select it</span>
       </div>
       <div className="min-h-0 flex-1 overflow-hidden rounded-xl border border-border bg-[#fbfaf7] shadow-inner">
-        <svg viewBox={`0 0 ${width} ${height}`} className="h-full w-full">
+        <svg
+          viewBox={`0 0 ${width} ${height}`}
+          className="h-full w-full"
+          role="img"
+          aria-label="Technical front elevation"
+        >
           <defs>
             <pattern
               id="front-grid"
@@ -81,6 +99,64 @@ export default function FrontView({
           </defs>
           {showGrid && <rect width={width} height={height} fill="url(#front-grid)" />}
           <line x1="0" y1={toY(0)} x2={width} y2={toY(0)} stroke="#69736d" strokeWidth="2" />
+          <text x={12} y={toY(0) - 8} fontSize="9" letterSpacing="1" fill="#69736d">
+            FLOOR LINE
+          </text>
+          {items.length > 0 && (
+            <>
+              <line
+                x1={toX(itemMinX)}
+                y1={toY(0)}
+                x2={toX(itemMinX)}
+                y2={overallDimensionY}
+                stroke="#9aa69f"
+                strokeWidth="1"
+              />
+              <line
+                x1={toX(itemMaxX)}
+                y1={toY(0)}
+                x2={toX(itemMaxX)}
+                y2={overallDimensionY}
+                stroke="#9aa69f"
+                strokeWidth="1"
+              />
+              <TechnicalDimension
+                x1={toX(itemMinX)}
+                y1={overallDimensionY}
+                x2={toX(itemMaxX)}
+                y2={overallDimensionY}
+                label={`Total · ${cm(itemMaxX - itemMinX)}`}
+              />
+            </>
+          )}
+          {selectedItem && (
+            <>
+              <line
+                x1={toX(selectedItem.x - selectedItem.width / 2)}
+                y1={toY(selectedItem.elevation)}
+                x2={toX(selectedItem.x - selectedItem.width / 2) - 24}
+                y2={toY(selectedItem.elevation)}
+                stroke="#9aa69f"
+                strokeWidth="1"
+              />
+              <line
+                x1={toX(selectedItem.x - selectedItem.width / 2)}
+                y1={toY(selectedItem.elevation + selectedItem.height)}
+                x2={toX(selectedItem.x - selectedItem.width / 2) - 24}
+                y2={toY(selectedItem.elevation + selectedItem.height)}
+                stroke="#9aa69f"
+                strokeWidth="1"
+              />
+              <TechnicalDimension
+                x1={toX(selectedItem.x - selectedItem.width / 2) - 24}
+                y1={toY(selectedItem.elevation + selectedItem.height)}
+                x2={toX(selectedItem.x - selectedItem.width / 2) - 24}
+                y2={toY(selectedItem.elevation)}
+                label={`Height · ${cm(selectedItem.height)}`}
+                vertical
+              />
+            </>
+          )}
           {items.map((item) => {
             const unit =
               item.kind === "unit"
@@ -88,7 +164,7 @@ export default function FrontView({
                 : null;
             const selected = item.selected;
             const x = toX(item.x - item.width / 2);
-            const y = toY(item.height);
+            const y = toY(item.elevation + item.height);
             const w = item.width * SCALE;
             const h = item.height * SCALE;
             const fill = frontColor(config, item);
@@ -103,6 +179,8 @@ export default function FrontView({
               (item.wall &&
                 item.bay != null &&
                 doorModeOf(config, item.wall, item.bay) === "pullout");
+            const sectionFractions = unit ? frontSectionFractions(unit) : [1];
+            const fittings = unit ? fittingsOf(unit) : [];
             return (
               <g
                 key={item.id}
@@ -180,6 +258,41 @@ export default function FrontView({
                     strokeDasharray="4 3"
                   />
                 )}
+                {sectionFractions.length > 1 &&
+                  sectionFractions
+                    .slice(0, -1)
+                    .reduce<number[]>((positions, fraction) => {
+                      positions.push((positions.at(-1) ?? 0) + fraction);
+                      return positions;
+                    }, [])
+                    .map((fraction, index) => (
+                      <line
+                        key={`section-${index}`}
+                        x1={x}
+                        y1={y + h * fraction}
+                        x2={x + w}
+                        y2={y + h * fraction}
+                        stroke="#736d65"
+                        strokeWidth="1.4"
+                      />
+                    ))}
+                {fittings.map((fitting) => {
+                  const fittingY = toY(item.elevation + fitting.y);
+                  if (fittingY <= y + 5 || fittingY >= y + h - 5) return null;
+                  return (
+                    <line
+                      key={fitting.id}
+                      x1={x + 6}
+                      y1={fittingY}
+                      x2={x + w - 6}
+                      y2={fittingY}
+                      stroke="#5d766a"
+                      strokeWidth="1"
+                      strokeDasharray={fitting.type === "shelf" ? undefined : "4 3"}
+                      opacity="0.78"
+                    />
+                  );
+                })}
                 <text x={x + w / 2} y={y - 8} textAnchor="middle" fontSize="10" fill="#38413c">
                   {Math.round(item.width)} × {Math.round(item.height)} cm
                 </text>

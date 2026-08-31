@@ -14,6 +14,15 @@ const nestedByPartId = (cutlist: CncCutlist) => {
 function row(projectName: string, item: CncPart, nested: NestedPart | undefined) {
   const placedWidth = nested ? (nested.rotated ? item.height : item.width) : "";
   const placedHeight = nested ? (nested.rotated ? item.width : item.height) : "";
+  const edgeBand = item.edgeBand
+    ? `${item.edgeBand.sides.join("+")} @ ${item.edgeBand.thickness.toFixed(1)} mm`
+    : "";
+  const operations = (item.operations ?? [])
+    .map((operation) => operation.kind)
+    .reduce((counts, kind) => ({ ...counts, [kind]: (counts[kind] ?? 0) + 1 }), {} as Record<string, number>);
+  const operationSummary = Object.entries(operations)
+    .map(([kind, count]) => `${kind}:${count}`)
+    .join(" ");
   return [
     projectName,
     nested?.sheet ?? "",
@@ -24,12 +33,16 @@ function row(projectName: string, item: CncPart, nested: NestedPart | undefined)
     item.height.toFixed(1),
     item.thickness.toFixed(1),
     item.grain,
+    item.kind ?? "",
+    item.material ?? "",
+    edgeBand,
+    operationSummary,
     nested?.x.toFixed(1) ?? "",
     nested?.y.toFixed(1) ?? "",
     placedWidth === "" ? "" : Number(placedWidth).toFixed(1),
     placedHeight === "" ? "" : Number(placedHeight).toFixed(1),
     nested?.rotated ? "yes" : nested ? "no" : "",
-    nested ? "NESTED" : "OVERSIZED / NOT NESTED",
+    nested ? "NESTED" : item.cnc ? "OVERSIZED / NOT NESTED" : "NON-CNC / SUPPLIED SEPARATELY",
     item.note ?? "",
   ]
     .map(csvCell)
@@ -53,6 +66,10 @@ export function createCncManifestCsv(cutlist: CncCutlist, projectName = "Project
     "design_height_mm",
     "thickness_mm",
     "grain",
+    "component_kind",
+    "material",
+    "edge_band",
+    "operations",
     "x_mm",
     "y_mm",
     "placed_width_mm",

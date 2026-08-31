@@ -19,6 +19,9 @@ import {
   type WallId,
 } from "@/lib/wardrobe";
 import { alignToWall, footprintSize, nextUnitX, snapUnitToRoom } from "@/lib/units";
+import { cncSettings } from "@/lib/cnc";
+import { buildUnitConstruction } from "@/lib/construction";
+import { buildAssemblyGuide } from "@/lib/assembly-guide";
 import { addFitting, fittingsOf, moveFitting, removeFitting } from "@/lib/fittings";
 import {
   loadPresets,
@@ -141,6 +144,8 @@ function Planner() {
   const [mobileSheet, setMobileSheet] = useState(false);
   const [viewMode, setViewMode] = useState<"3d" | "2d" | "front">("3d");
   const [showGrid, setShowGrid] = useState(true);
+  const [assemblyView, setAssemblyView] = useState(false);
+  const [assemblyStep, setAssemblyStep] = useState<number | null>(null);
   const [cleanPreview, setCleanPreview] = useState(false);
   const [contextMenu, setContextMenu] = useState<{ id: string; x: number; y: number } | null>(null);
   const [assemblyWorkspace, setAssemblyWorkspace] = useState(false);
@@ -156,6 +161,16 @@ function Planner() {
   const clipboard = useRef<Unit | null>(null);
   const isModular = config.roomShape === "modular";
   const isAssemblyWorkspace = assemblyWorkspace || isModular;
+  const assemblyStepKind = useMemo(() => {
+    if (!assemblyView || assemblyStep === null || !selectedUnit) return null;
+    const unitIndex = config.units.findIndex((unit) => unit.id === selectedUnit);
+    const unit = config.units[unitIndex];
+    if (!unit || unitIndex < 0) return null;
+    const guide = buildAssemblyGuide(
+      buildUnitConstruction(unit, unitIndex, cncSettings(config)),
+    );
+    return guide.steps[assemblyStep]?.kind ?? null;
+  }, [assemblyStep, assemblyView, config, selectedUnit]);
   const setActive = (wall: WallId, bay: number) => {
     setActiveWall(wall);
     setActiveBay(bay);
@@ -164,8 +179,10 @@ function Planner() {
     if (!id) {
       setSelectedUnit(null);
       setSelectedUnitIds([]);
+      setAssemblyStep(null);
       return;
     }
+    if (assemblyView && id !== selectedUnit) setAssemblyStep(0);
     if (additive) {
       setSelectedUnitIds((ids) =>
         ids.includes(id) ? ids.filter((candidate) => candidate !== id) : [...ids, id],
@@ -175,6 +192,21 @@ function Planner() {
     }
     setSelectedUnit(id);
     setSelectedUnitIds([id]);
+  };
+  const toggleAssemblyPreview = () => {
+    if (assemblyView) {
+      setAssemblyView(false);
+      setAssemblyStep(null);
+      return;
+    }
+    const targetId = selectedUnit ?? config.units[0]?.id;
+    if (!targetId) {
+      toast.error("Add a cabinet before opening assembly preview");
+      return;
+    }
+    if (!selectedUnit) selectModularUnit(targetId);
+    setAssemblyStep(0);
+    setAssemblyView(true);
   };
   const setConfig = useCallback(
     (fn: (c: Config) => Config) => setConfigState((c) => fn(c)),
@@ -864,7 +896,18 @@ function Planner() {
       savedKitchenLayouts={savedKitchenLayouts}
       onSaveKitchenLayout={(name) => setSavedKitchenLayouts(saveKitchenLayout(config, name))}
       onRemoveKitchenLayout={(id) => setSavedKitchenLayouts(removeKitchenLayout(id))}
+      onLayoutApplied={(layout) => {
+        setViewMode("3d");
+        if (layout.showGrid !== undefined) setShowGrid(layout.showGrid);
+        setAssemblyView(false);
+        setAssemblyStep(null);
+        setCleanPreview(false);
+      }}
       onDuplicate={unitActions.onDuplicate}
+      assemblyView={assemblyView}
+      onToggleAssemblyView={toggleAssemblyPreview}
+      assemblyStep={assemblyStep}
+      onAssemblyStepChange={setAssemblyStep}
       editInterior={editInterior}
       onToggleEditInterior={interior.onToggleEditInterior}
       selectedFitting={selectedFitting}
@@ -932,6 +975,9 @@ function Planner() {
             beginTransaction={beginTransaction}
             commitTransaction={commitTransaction}
             cancelTransaction={cancelTransaction}
+            showGrid={showGrid && !cleanPreview}
+            assemblyView={assemblyView}
+            assemblyStepKind={assemblyStepKind}
             onMove={(id, x, z) =>
               setConfigState((c) => ({
                 ...c,
@@ -942,6 +988,7 @@ function Planner() {
             actions={unitActions}
             interior={interior}
             showDimensions={config.showDimensions}
+            panelThicknessMm={cncSettings(config).panelThickness}
             drawersOpen={config.openDrawers ?? false}
             invalidUnitIds={[
               ...new Set(
@@ -977,7 +1024,7 @@ function Planner() {
 
   /** Floating viewport toolbar — full screen + panel visibility. */
   const viewportToolbar = (
-    <div className="absolute top-3 right-3 z-20 flex items-center gap-2">
+    <div className="absolute top-2 right-2 z-20 flex max-w-[calc(100%-1rem)] flex-wrap items-center justify-end gap-1.5 sm:top-3 sm:right-3 sm:max-w-none sm:gap-2">
       <div className="hidden items-center gap-1 rounded-lg border border-border bg-card/90 p-1 backdrop-blur sm:flex">
         <Button
           variant={viewMode === "2d" ? "secondary" : "ghost"}
@@ -1061,14 +1108,14 @@ function Planner() {
       <Button
         variant="outline"
         size="icon"
-        className="size-9 bg-card/90 backdrop-blur"
+        className="hidden size-9 bg-card/90 backdrop-blur sm:inline-flex"
         aria-label="Reset camera"
         title="Reset camera"
         onClick={() => window.dispatchEvent(new CustomEvent("wardrobe-camera-reset"))}
       >
         <RotateCcw className="size-4" />
       </Button>
-      <div className="flex items-center gap-1 rounded-lg border border-border bg-card/90 p-1 backdrop-blur">
+      <div className="hidden items-center gap-1 rounded-lg border border-border bg-card/90 p-1 backdrop-blur sm:flex">
         <Button
           variant="ghost"
           size="icon"
@@ -1119,7 +1166,7 @@ function Planner() {
       <Button
         variant="outline"
         size="icon"
-        className="size-9 bg-card/90 backdrop-blur"
+        className="hidden size-9 bg-card/90 backdrop-blur sm:inline-flex"
         aria-label={fullscreen ? "Exit full screen" : "Full screen focus view"}
         title={fullscreen ? "Exit full screen" : "Full screen focus view"}
         onClick={toggleFullscreen}
@@ -1199,11 +1246,14 @@ function Planner() {
   /** Mobile: controls live in a swipeable bottom sheet. */
   const mobileSheetNode = (
     <Drawer open={mobileSheet} onOpenChange={setMobileSheet}>
-      <DrawerContent className="max-h-[88dvh]">
+      <DrawerContent
+        overlayClassName="bg-background"
+        className="h-[88dvh] max-h-[calc(100dvh-env(safe-area-inset-top))] border-border bg-background pb-[env(safe-area-inset-bottom)]"
+      >
         <DrawerHeader className="pb-2">
           <DrawerTitle className="text-sm">Configurator</DrawerTitle>
         </DrawerHeader>
-        <div className="min-h-0 overflow-y-auto overscroll-contain px-1 pb-[calc(1.5rem+env(safe-area-inset-bottom))]">
+        <div className="min-h-0 overflow-y-auto overscroll-contain px-1 pb-4 touch-pan-y">
           <div className="mb-3 grid grid-cols-2 gap-2 px-3 sm:grid-cols-3">
             <Button size="sm" className="h-10 gap-2" onClick={share} disabled={busy}>
               <Link2 className="size-4" />

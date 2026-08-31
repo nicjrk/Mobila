@@ -20,8 +20,13 @@ export type KitchenLayoutPreset = {
   id: string;
   name: string;
   description: string;
+  /** Optional family label used to keep wardrobe layouts distinct from kitchens. */
+  category?: "kitchen" | "wardrobe";
   /** Room envelope read from the sketch, applied when the layout replaces the design. */
   room?: Partial<ModularRoom>;
+  /** Presentation defaults for a layout used as a client-facing room scene. */
+  showDimensions?: boolean;
+  showGrid?: boolean;
   units: Array<Partial<Omit<Unit, "id">>>;
 };
 
@@ -36,6 +41,161 @@ export type SavedKitchenLayout = {
 
 /** Built-in complete kitchen layout based on the supplied L-shaped reference. */
 const BUILT_IN_KITCHEN_LAYOUT_PRESETS: KitchenLayoutPreset[] = [
+  {
+    id: "photo-kitchen-linear",
+    name: "Photo Kitchen · Modern Linear",
+    description:
+      "Modern linear kitchen with tall fridge, drawers, oven and hob, sink, washing machine, double-oven tower, open shelves and a three-door wall cabinet.",
+    room: {
+      width: 560,
+      depth: 250,
+      height: 280,
+      wallThickness: 12,
+      entryWidth: 110,
+    },
+    showDimensions: false,
+    showGrid: false,
+    units: (() => {
+      // Every floor module is placed from the end of the previous one. This
+      // keeps the run flush and makes the intended cabinet relationships
+      // explicit instead of relying on visual coordinates or collision repair.
+      const widths = [60, 75, 60, 80, 80, 60, 60] as const;
+      const runStart = -widths.reduce((sum, width) => sum + width, 0) / 2;
+      const centerAt = (index: number) =>
+        runStart +
+        widths.slice(0, index).reduce((sum, width) => sum + width, 0) +
+        widths[index]! / 2;
+      const base = {
+        finish: "greige" as const,
+        d: 60,
+        y: 0,
+        shelves: 0,
+        rail: false,
+        snap: false,
+      };
+      const worktop = {
+        ...base,
+        countertop: true,
+        countertopMaterial: "stone" as const,
+        backsplash: true,
+      };
+      return [
+        {
+          ...base,
+          name: "Tall fridge cabinet · 600 mm",
+          x: centerAt(0),
+          z: 30,
+          w: widths[0],
+          h: 220,
+          mount: "tall" as const,
+          front: "door" as const,
+          appliances: [{ id: "photo-fridge", type: "fridge" as const, y: 4 }],
+        },
+        {
+          ...worktop,
+          name: "Three-drawer base cabinet · 750 mm",
+          x: centerAt(1),
+          z: 30,
+          w: widths[1],
+          h: 80,
+          mount: "base" as const,
+          front: "drawers" as const,
+          drawers: 3,
+          drawerHeight: 22,
+        },
+        {
+          ...worktop,
+          name: "Oven and hob cabinet · 600 mm",
+          x: centerAt(2),
+          z: 30,
+          w: widths[2],
+          h: 80,
+          mount: "base" as const,
+          front: "none" as const,
+          appliances: [
+            { id: "photo-oven", type: "oven" as const, y: 4 },
+            { id: "photo-hob", type: "hob" as const, y: 4 },
+          ],
+        },
+        {
+          ...worktop,
+          name: "Double-door base cabinet · 800 mm",
+          x: centerAt(3),
+          z: 30,
+          w: widths[3],
+          h: 80,
+          mount: "base" as const,
+          front: "double" as const,
+        },
+        {
+          ...worktop,
+          name: "Sink cabinet · 800 mm",
+          x: centerAt(4),
+          z: 30,
+          w: widths[4],
+          h: 80,
+          mount: "base" as const,
+          front: "double" as const,
+          faucet: true,
+          appliances: [{ id: "photo-sink", type: "sink" as const, y: 4 }],
+        },
+        {
+          ...worktop,
+          name: "Washing machine cabinet · 600 mm",
+          x: centerAt(5),
+          z: 30,
+          w: widths[5],
+          h: 80,
+          mount: "base" as const,
+          front: "none" as const,
+          appliances: [{ id: "photo-washer", type: "washer" as const, y: 4 }],
+        },
+        {
+          ...base,
+          name: "Double-oven tower · 600 mm",
+          x: centerAt(6),
+          z: 30,
+          w: widths[6],
+          h: 220,
+          mount: "tall" as const,
+          front: "none" as const,
+          countertop: true,
+          countertopMaterial: "stone" as const,
+          appliances: [
+            { id: "photo-oven-lower", type: "oven" as const, y: 4 },
+            { id: "photo-oven-upper", type: "oven" as const, y: 68 },
+          ],
+        },
+        ...([1, 2, 3] as const).map((index) => ({
+          ...base,
+          name: `Open shelf module ${index} · ${widths[index]} mm`,
+          x: centerAt(index),
+          z: 17.5,
+          w: widths[index],
+          h: 70,
+          y: 150,
+          d: 35,
+          mount: "wall" as const,
+          front: "none" as const,
+          shelves: 2,
+          light: true,
+        })),
+        {
+          ...base,
+          name: "Three-door wall cabinet · 1250 × 600 mm",
+          x: centerAt(4) + (widths[4] + widths[5]) / 2,
+          z: 17.5,
+          w: 125,
+          h: 60,
+          y: 220,
+          d: 35,
+          mount: "wall" as const,
+          front: "door" as const,
+          frontLeaves: 3,
+        },
+      ];
+    })(),
+  },
   {
     id: "l-kitchen-reference",
     name: "L-Kitchen · Sink + Hob + Tall Fridge",
@@ -414,6 +574,48 @@ const BUILT_IN_KITCHEN_LAYOUT_PRESETS: KitchenLayoutPreset[] = [
         appliances: [{ id: "k5-extractor", type: "extractor", y: 4 }],
       },
     ],
+  },
+];
+
+/** Wardrobe layout reconstructed from the supplied five-bay elevation sketch. */
+const BUILT_IN_WARDROBE_LAYOUT_PRESETS: KitchenLayoutPreset[] = [
+  {
+    id: "wardrobe-5",
+    name: "Dulap cu 5",
+    category: "wardrobe",
+    description:
+      "Dulap pe un singur front, inspirat de schiță: 251 cm lățime, 227 cm înălțime și cinci module egale de aproximativ 50,2 cm. Adâncimea standard este 60 cm și poate fi modificată.",
+    room: {
+      width: 340,
+      depth: 180,
+      height: 260,
+      wallThickness: 12,
+      entryWidth: 90,
+    },
+    showDimensions: false,
+    showGrid: false,
+    units: (() => {
+      const totalWidth = 251;
+      const moduleWidth = totalWidth / 5;
+      const start = -totalWidth / 2;
+      return Array.from({ length: 5 }, (_, index) => ({
+        name: `Dulap cu 5 · modul ${index + 1}`,
+        x: start + moduleWidth * index + moduleWidth / 2,
+        z: 30,
+        w: moduleWidth,
+        h: 227,
+        d: 60,
+        finish: "white" as const,
+        mount: "tall" as const,
+        front: "door" as const,
+        frontSections: 1 as const,
+        shelves: 0,
+        drawers: 0,
+        rail: false,
+        y: 0,
+        snap: false,
+      }));
+    })(),
   },
 ];
 
@@ -921,6 +1123,8 @@ const KITCHEN_5_IMAGE_REFERENCE: KitchenLayoutPreset = {
 /** Kitchen 5 was retired and must not be offered as an available layout. */
 export const KITCHEN_LAYOUT_PRESETS = BUILT_IN_KITCHEN_LAYOUT_PRESETS
   .filter((layout) => layout.id !== "kitchen-5-sketch");
+
+export const WARDROBE_LAYOUT_PRESETS = BUILT_IN_WARDROBE_LAYOUT_PRESETS;
 
 const KEY = "cabinet-presets";
 const KITCHEN_KEY = "kitchen-layout-presets";
