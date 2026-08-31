@@ -11,7 +11,7 @@ import {
   HANDLE_ALIGNS,
   HANDLE_STYLES,
   HANDLE_SIDES,
-  ROOM_SHAPES,
+  PRIMARY_WORKSPACES,
   DOOR_MODES,
   MODULE_TYPES,
   ITEM_META,
@@ -44,7 +44,6 @@ import {
   doorPartsOf,
   enterModular,
   enterUnderStairs,
-  exitUnderStairs,
   slopeAngle,
   slopeOf,
   setSlopeAngle,
@@ -175,8 +174,8 @@ export default function LeftPanel({
   // into the multi-wall editor.
   const multi = config.roomShape !== "straight" && !us;
   const [layoutExpanded, setLayoutExpanded] = useState(false);
-  const activeLayout =
-    ROOM_SHAPES.find((layout) => layout.id === config.roomShape) ?? ROOM_SHAPES[0]!;
+  const activeWorkspace = config.roomShape === "understairs" ? "understairs" : "modular";
+  const activeLayout = PRIMARY_WORKSPACES.find((layout) => layout.id === activeWorkspace)!;
   const spec = wallSpec(config, activeWall);
   const wallName = wallLabel(config.roomShape, activeWall);
   const bays = bayCountOf(config, activeWall);
@@ -336,26 +335,20 @@ export default function LeftPanel({
               Choose a room shape
             </div>
             <div className="grid grid-cols-2 gap-2">
-              {ROOM_SHAPES.map((o) => (
+              {PRIMARY_WORKSPACES.map((o) => (
                 <button
                   key={o.id}
                   onClick={() => {
                     if (o.id === "modular") onEnterAssembly?.();
                     setConfig((c) =>
-                      o.id === "modular"
-                        ? enterModular(c)
-                        : o.id === "understairs"
-                          ? enterUnderStairs(c)
-                          : c.roomShape === "understairs"
-                            ? exitUnderStairs(c, o.id)
-                            : { ...c, roomShape: o.id },
+                      o.id === "understairs" ? enterUnderStairs(c) : enterModular(c),
                     );
                     setActive("a", 0);
                     setDoorSel(null);
                     setLayoutExpanded(false);
                   }}
                   className={`rounded-md border p-2 text-left transition-colors ${
-                    config.roomShape === o.id
+                    activeWorkspace === o.id
                       ? "border-primary bg-accent"
                       : "border-border hover:bg-secondary"
                   }`}
@@ -366,8 +359,8 @@ export default function LeftPanel({
               ))}
             </div>
             <p className="px-1 text-[11px] text-muted-foreground">
-              Multi-wall layouts share one room but keep independent dimensions. Modular and
-              Under-Stairs are focused cabinet-building modes.
+              The workspace is focused on either sloped/triangular cabinets or free modular
+              assembly. Older room layouts remain readable for compatibility.
             </p>
           </div>
         )}

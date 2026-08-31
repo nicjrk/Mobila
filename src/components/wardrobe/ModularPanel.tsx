@@ -17,13 +17,14 @@ import {
   HANDLE_ALIGNS,
   HANDLE_POSITIONS,
   HANDLE_STYLES,
-  ROOM_SHAPES,
+  PRIMARY_WORKSPACES,
   UNIT_FRONTS,
   UNIT_LIMITS,
   UNIT_MOUNTS,
   ITEM_META,
+  applianceModuleSpec,
   enterModular,
-  exitUnderStairs,
+  enterUnderStairs,
   newId,
   leafCount,
   sectionKey,
@@ -45,9 +46,11 @@ import type { ApplianceType, FittingType } from "@/lib/wardrobe";
 import { CATALOG, type CatalogProduct } from "@/lib/catalog";
 import { alignToWall, nextUnitX, previousUnitX, snapUnitToRoom } from "@/lib/units";
 import type { ValidationIssue } from "@/lib/validation";
-import { buildCncCutlist, cncSettings } from "@/lib/cnc";
-import { createDxf, dxfFileName } from "@/lib/dxf";
+import { buildCncCutlist, cncSettings, validateCncCutlist } from "@/lib/cnc";
+import { createDxf, dxfFileName, dxfSheetFileName } from "@/lib/dxf";
+import { createCncManifestCsv } from "@/lib/cnc-manifest";
 import { createCutlistPdfHtml } from "@/lib/cutlist-pdf";
+import { downloadBlob } from "@/lib/download";
 import {
   addFitting,
   fittingsOf,
@@ -164,8 +167,10 @@ function KitchenLayoutPreview({
 }) {
   const width = large ? 300 : 190;
   const height = large ? 150 : 92;
-  const scaleX = width / 800;
-  const scaleZ = height / 600;
+  const roomWidth = layout.room?.width ?? 800;
+  const roomDepth = layout.room?.depth ?? 600;
+  const scaleX = width / roomWidth;
+  const scaleZ = height / roomDepth;
   return (
     <div className="overflow-hidden rounded-lg border border-border bg-[#f7f4ef] p-1">
       <svg
@@ -521,9 +526,12 @@ export default function ModularPanel({
         if (index === 0) firstId = unit.id;
         return unit;
       });
+      const room =
+        mode === "replace" && layout.room ? { ...c.modularRoom, ...layout.room } : c.modularRoom;
       return {
         ...c,
-        units: created.reduce((all, unit) => [...all, snapUnitToRoom(unit, all, c.modularRoom)], [
+        ...(mode === "replace" && layout.room ? { modularRoom: room } : {}),
+        units: created.reduce((all, unit) => [...all, snapUnitToRoom(unit, all, room)], [
           ...(mode === "append" ? c.units : []),
         ] as Unit[]),
       };
@@ -567,39 +575,93 @@ export default function ModularPanel({
     patch(u.id, { mount, y: m.y, h: m.h ?? u.h });
   };
 
-  const addFreestandingAppliance = (type: ApplianceType) => {
+  const addApplianceModule = (type: ApplianceType) => {
     const createdId = newId();
+    const spec = applianceModuleSpec(type);
     setConfig((c) => {
-      const applianceHeight = Math.min(ITEM_META[type].height, c.modularRoom.height - 10);
+      const maxUnitHeight = Math.max(40, c.modularRoom.height - spec.y);
+      const unitHeight = Math.min(spec.h, maxUnitHeight);
+      const unitY = Math.min(spec.y, Math.max(0, c.modularRoom.height - unitHeight));
       const unit = newUnit({
         id: createdId,
-        x: nextUnitX(c.units, 60),
+        name: spec.label,
+        x: nextUnitX(c.units, spec.w),
         z: c.units[0]?.z ?? 30,
-        w: 60,
-        h: applianceHeight,
-        d: type === "microwave" ? 40 : 60,
-        mount: "base",
-        front: "none",
-        standaloneAppliance: type,
+        w: spec.w,
+        h: unitHeight,
+        d: spec.d,
+        y: unitY,
+        mount: spec.mount,
+        front: spec.front,
+        countertop: spec.countertop,
+        countertopMaterial: spec.countertopMaterial,
+        faucet: spec.faucet,
+        appliances: spec.applianceTypes.map((applianceType) => ({
+          id: newId(),
+          type: applianceType,
+          x: 0,
+          y: 4,
+        })),
       });
       return { ...c, units: [...c.units, snapUnitToRoom(unit, c.units, c.modularRoom)] };
     });
     setSelectedId(createdId);
-    toast.success(`${ITEM_META[type].name} added as freestanding appliance`);
+    toast.success(`${spec.label} added with wooden housing`);
   };
 
   const cnc = cncSettings(config);
   const cutlist = buildCncCutlist(config);
+  const cncIssues = validateCncCutlist(cutlist);
+  const cncErrors = cncIssues.filter((issue) => issue.severity === "error");
+  const cncReady = cncErrors.length === 0 && cutlist.oversized.length === 0;
+  const canExportCnc = () => {
+    if (cncReady) return true;
+    toast.error("Export CNC blocat / CNC export blocked", {
+      description:
+        cutlist.oversized.length > 0
+          ? "RO: Împarte piesele prea mari sau alege o placă suficient de mare. / EN: Split the oversized parts or choose a sheet that can contain them."
+          : "RO: Corectează erorile de geometrie înainte de trimiterea la utilaj. / EN: Fix the CNC geometry errors before sending the file to the machine.",
+    });
+    return false;
+  };
+  const oversizedCopy = (item: (typeof cutlist.oversized)[number]) => {
+    const usableWidth = cnc.sheetWidth - 2 * cnc.sheetMargin;
+    const usableHeight = cnc.sheetHeight - 2 * cnc.sheetMargin;
+    const canOnlyFitByRotation =
+      item.grain !== "none" && item.height <= usableWidth && item.width <= usableHeight;
+    return canOnlyFitByRotation
+      ? {
+          ro: "Fibra este fixă, iar piesa ar încăpea doar dacă ar fi rotită. Schimbă direcția de debitare sau împarte piesa.",
+          en: "The grain direction is fixed and this part would fit only if rotated. Change the cutting direction or split the part.",
+        }
+      : {
+          ro: `Piesa depășește placa utilă de ${usableWidth.toFixed(0)} × ${usableHeight.toFixed(0)} mm. Împarte piesa sau alege o placă mai mare.`,
+          en: `The part exceeds the usable sheet area of ${usableWidth.toFixed(0)} × ${usableHeight.toFixed(0)} mm. Split it or choose a larger sheet.`,
+        };
+  };
   const patchCnc = (key: keyof typeof cnc, value: number) =>
     setConfig((c) => ({ ...c, cnc: { ...cncSettings(c), [key]: value } }));
   const downloadCnc = () => {
+    if (!canExportCnc()) return;
     const name = projectName.trim() || "Project";
-    const blob = new Blob([createDxf(cutlist, name)], { type: "application/dxf" });
-    const link = document.createElement("a");
-    link.href = URL.createObjectURL(blob);
-    link.download = dxfFileName(name);
-    link.click();
-    URL.revokeObjectURL(link.href);
+    downloadBlob(
+      new Blob([createDxf(cutlist, name)], { type: "application/dxf" }),
+      dxfFileName(name),
+    );
+  };
+  const downloadCncSheets = () => {
+    if (!canExportCnc()) return;
+    const name = projectName.trim() || "Project";
+    cutlist.sheets.forEach((sheet, index) => {
+      window.setTimeout(() => {
+        const singleSheetCutlist = { ...cutlist, sheets: [sheet] };
+        downloadBlob(
+          new Blob([createDxf(singleSheetCutlist, name, [sheet])], { type: "application/dxf" }),
+          dxfSheetFileName(name, sheet.number),
+        );
+      }, index * 180);
+    });
+    toast.success(`${cutlist.sheets.length} individual CNC plate file(s) queued`);
   };
   const printCncPdf = () => {
     const report = window.open("", "_blank", "noopener,noreferrer,width=1200,height=900");
@@ -608,6 +670,22 @@ export default function ModularPanel({
     report.document.close();
     report.focus();
     report.setTimeout(() => report.print(), 300);
+  };
+  const downloadCncManifest = () => {
+    if (!cutlist.parts.length) {
+      toast.error("Nu există piese CNC / No CNC parts", {
+        description: "Adaugă cel puțin un dulap cu panouri înainte de export.",
+      });
+      return;
+    }
+    const name = projectName.trim() || "Project";
+    downloadBlob(
+      new Blob([createCncManifestCsv(cutlist, name)], { type: "text/csv;charset=utf-8" }),
+      `${name.replace(/[^a-z0-9-_]+/gi, "_") || "project"}-cnc-manifest.csv`,
+    );
+    toast.success("Manifestul CNC a fost exportat / CNC manifest exported", {
+      description: "Folosește-l pentru verificarea pieselor după importul DXF în Aspire.",
+    });
   };
 
   return (
@@ -684,17 +762,11 @@ export default function ModularPanel({
             </span>
           </AccordionTrigger>
           <AccordionContent className="grid grid-cols-2 gap-2 pb-4">
-            {ROOM_SHAPES.map((o) => (
+            {PRIMARY_WORKSPACES.map((o) => (
               <button
                 key={o.id}
                 onClick={() => {
-                  setConfig((c) =>
-                    o.id === "modular"
-                      ? enterModular(c)
-                      : c.roomShape === "understairs"
-                        ? exitUnderStairs(c, o.id)
-                        : { ...c, roomShape: o.id },
-                  );
+                  setConfig((c) => (o.id === "modular" ? enterModular(c) : enterUnderStairs(c)));
                   setSelectedId(null);
                 }}
                 className={`rounded-xl border p-2.5 text-left transition-all ${
@@ -785,22 +857,29 @@ export default function ModularPanel({
               </p>
               <div className="mt-3 border-t border-primary/15 pt-3">
                 <div className="mb-2 text-[11px] font-semibold text-foreground">
-                  Freestanding appliances
+                  Individual appliance modules
                 </div>
+                <p className="mb-2 text-[10px] leading-relaxed text-muted-foreground">
+                  Every appliance gets a wooden carcass, so it can be moved, rotated and exported to
+                  CNC like a cabinet. Oven adds its hob on the same worktop.
+                </p>
                 <div className="grid grid-cols-2 gap-2">
                   {(
                     [
-                      ["fridge", "Fridge"],
-                      ["oven", "Oven"],
-                      ["microwave", "Microwave"],
+                      ["fridge", "Fridge tower"],
+                      ["oven", "Oven + hob"],
+                      ["microwave", "Microwave wall"],
                       ["washer", "Washing machine"],
                       ["dishwasher", "Dishwasher"],
+                      ["sink", "Sink base"],
+                      ["hob", "Hob base"],
+                      ["extractor", "Extractor wall"],
                     ] as const
                   ).map(([type, label]) => (
                     <button
                       key={type}
                       type="button"
-                      onClick={() => addFreestandingAppliance(type)}
+                      onClick={() => addApplianceModule(type)}
                       className="rounded-lg border border-border bg-background px-2 py-2 text-left text-[11px] font-medium text-foreground transition-colors hover:border-primary hover:bg-accent"
                     >
                       {label}
@@ -1034,21 +1113,114 @@ export default function ModularPanel({
               <span>{cutlist.totalAreaM2.toFixed(2)} m² total</span>
               <span>Joinery compensated for {cnc.panelThickness} mm board</span>
             </div>
-            {cutlist.oversized.length > 0 && (
-              <p className="rounded-lg border border-amber-300 bg-amber-50 p-2 text-[10px] text-amber-800">
-                {cutlist.oversized.length} part(s) do not fit the standard sheet and were not
-                nested.
-              </p>
+            {cutlist.sheets.length > 0 && (
+              <div className="space-y-1.5 rounded-lg border border-border bg-background/70 p-2 text-[10px]">
+                <div className="font-semibold text-foreground">Automatic plate allocation</div>
+                {cutlist.sheets.map((sheet) => {
+                  const cabinets = [...new Set(sheet.parts.map((item) => item.cabinet))];
+                  return (
+                    <div
+                      key={sheet.number}
+                      className="rounded-md border border-border/70 bg-card px-2 py-1.5"
+                    >
+                      <div className="flex items-center justify-between gap-2 font-medium text-foreground">
+                        <span>Plate {String(sheet.number).padStart(2, "0")}</span>
+                        <span className="text-muted-foreground">{sheet.parts.length} panels</span>
+                      </div>
+                      <div className="mt-0.5 break-words text-muted-foreground">
+                        {cabinets.join(" · ")}
+                      </div>
+                    </div>
+                  );
+                })}
+                <p className="pt-0.5 text-muted-foreground">
+                  Cabinets are allocated by material efficiency; a cabinet may continue on the next
+                  plate when its parts do not fit together on one sheet.
+                </p>
+              </div>
             )}
-            <div className="grid grid-cols-2 gap-2">
+            {cncReady ? (
+              <p className="rounded-lg border border-emerald-300/70 bg-emerald-50 p-2 text-[10px] text-emerald-800">
+                Verificarea plăcilor a trecut: dimensiunile, limitele și suprapunerile sunt corecte.
+                <span className="block opacity-75">
+                  Panel nesting passed: dimensions, sheet boundaries and overlaps are valid.
+                </span>
+              </p>
+            ) : (
+              <div className="space-y-1 rounded-lg border border-red-300 bg-red-50 p-2 text-[10px] text-red-800">
+                <p className="font-semibold">Export CNC blocat / CNC export blocked:</p>
+                {cncIssues.slice(0, 4).map((issue) => (
+                  <p key={issue.id}>
+                    <span className="block">{issue.messageRo ?? issue.message}</span>
+                    {issue.messageRo && <span className="block opacity-75">{issue.message}</span>}
+                  </p>
+                ))}
+                {cutlist.oversized.length > 0 && (
+                  <>
+                    <p>
+                      • RO: {cutlist.oversized.length} piesă/piese nu încap pe placa configurată și
+                      nu au fost repartizate.
+                    </p>
+                    <p className="opacity-75">
+                      EN: {cutlist.oversized.length} part(s) do not fit the configured sheet and
+                      were not nested.
+                    </p>
+                    <div className="mt-1 space-y-1 border-t border-red-300/70 pt-1">
+                      {cutlist.oversized.map((item) => {
+                        const copy = oversizedCopy(item);
+                        return (
+                          <div key={item.id}>
+                            <p className="font-medium">
+                              {item.cabinet} · {item.label} · {item.width.toFixed(0)} ×
+                              {item.height.toFixed(0)} mm
+                            </p>
+                            <p>{copy.ro}</p>
+                            <p className="opacity-75">{copy.en}</p>
+                          </div>
+                        );
+                      })}
+                    </div>
+                  </>
+                )}
+                {cncIssues.length > 4 && (
+                  <p>+ {cncIssues.length - 4} alte probleme / more issue(s)</p>
+                )}
+              </div>
+            )}
+            {cutlist.camReviewReasons.length > 0 && (
+              <details className="rounded-lg border border-sky-300 bg-sky-50 p-2 text-[10px] text-sky-800">
+                <summary className="cursor-pointer font-semibold">
+                  Verificare CAM înainte de prelucrare / Pre-CAM checklist (
+                  {cutlist.camReviewReasons.length})
+                </summary>
+                <div className="mt-1 space-y-1">
+                  {cutlist.camReviewReasons.map((reason) => (
+                    <p key={reason.en}>
+                      <span className="block">{reason.ro}</span>
+                      <span className="block opacity-75">{reason.en}</span>
+                    </p>
+                  ))}
+                </div>
+              </details>
+            )}
+            <div className="grid gap-2 sm:grid-cols-2">
               <Button
                 type="button"
                 variant="outline"
                 className="rounded-xl"
                 onClick={downloadCnc}
-                disabled={!cutlist.sheets.length}
+                disabled={!cutlist.sheets.length || !cncReady}
               >
-                Download DXF
+                Download combined DXF
+              </Button>
+              <Button
+                type="button"
+                variant="outline"
+                className="rounded-xl"
+                onClick={downloadCncSheets}
+                disabled={!cutlist.sheets.length || !cncReady}
+              >
+                Export separate plates ({cutlist.sheets.length})
               </Button>
               <Button
                 type="button"
@@ -1059,7 +1231,21 @@ export default function ModularPanel({
               >
                 Print cut-list PDF
               </Button>
+              <Button
+                type="button"
+                variant="outline"
+                className="rounded-xl"
+                onClick={downloadCncManifest}
+                disabled={!cutlist.parts.length}
+              >
+                Export Aspire manifest (CSV)
+              </Button>
             </div>
+            <p className="rounded-lg border border-dashed border-sky-300/70 bg-sky-50/70 p-2 text-[10px] leading-4 text-sky-800">
+              DXF = geometria panourilor · CSV = trasabilitate placă/dulap/piesă · PDF = control
+              uman. Codul CNC final și traseele se generează în Aspire cu profilul și
+              postprocessorul utilajului.
+            </p>
           </AccordionContent>
         </AccordionItem>
 

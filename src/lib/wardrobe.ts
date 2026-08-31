@@ -31,6 +31,17 @@ export const APPLIANCE_TYPES: ApplianceType[] = [
   "sink",
   "extractor",
 ];
+
+/** Appliances whose front occupies the cabinet opening instead of a door leaf. */
+export const FRONT_APPLIANCE_TYPES: readonly ApplianceType[] = [
+  "fridge",
+  "washer",
+  "oven",
+  "microwave",
+  "dishwasher",
+];
+
+export const isFrontAppliance = (type: ApplianceType) => FRONT_APPLIANCE_TYPES.includes(type);
 export type SlopeSide = "left" | "right";
 export type DoorMode = "hinged" | "pullout";
 /** Grid builder: what fills one cell of the column grid. */
@@ -58,6 +69,20 @@ export const ROOM_SHAPES: { id: RoomShape; name: string; desc: string }[] = [
   { id: "galley", name: "Parallel Walls", desc: "Two facing runs" },
   { id: "understairs", name: "Under-Stairs Cabinet", desc: "Standalone sloped module" },
   { id: "modular", name: "Modular Assembly", desc: "Add & snap single units" },
+];
+
+/**
+ * The two customer-facing workspaces. Legacy room shapes remain in the data
+ * model so old designs can still be opened, but new navigation only exposes
+ * the two workflows we actively support.
+ */
+export const PRIMARY_WORKSPACES: { id: RoomShape; name: string; desc: string }[] = [
+  {
+    id: "understairs",
+    name: "Understairs / Triangular",
+    desc: "Sloped and triangular cabinet modules",
+  },
+  { id: "modular", name: "Modular Assembly", desc: "Add, place and customize cabinets" },
 ];
 
 export const HANDLE_SIDES: { id: HandleSide; name: string; desc: string }[] = [
@@ -239,6 +264,10 @@ export type Unit = {
   front: UnitFront;
   /** Number of horizontal front sections (1 full front, 2 or 3 stacked sections). */
   frontSections?: 1 | 2 | 3;
+  /** Number of coplanar vertical front leaves; supports three-door sketch modules. */
+  frontLeaves?: 1 | 2 | 3;
+  /** Relative heights for stacked front sections, kept as sketch proportions. */
+  frontSectionRatios?: number[];
   shelves: number;
   rail: boolean;
   drawers: number;
@@ -256,7 +285,7 @@ export type Unit = {
   fittings?: Fitting[];
   /** Full-height appliances placed inside this modular unit. */
   appliances?: UnitAppliance[];
-  /** Standalone appliance rendered without a cabinet carcass. */
+  /** Legacy field kept only so older files can be migrated to a housing module. */
   standaloneAppliance?: ApplianceType;
   /** Kitchen worktop sitting on top of the cabinet. */
   countertop?: boolean;
@@ -305,9 +334,22 @@ export type LeafSpec = {
 
 /** Number of door leaves a unit shows. */
 export function leafCount(u: Unit): number {
+  if (u.frontLeaves) return Math.max(1, Math.min(3, Math.round(u.frontLeaves)));
   if (u.front === "double") return 2;
   if (u.front === "door" || u.front === "glass") return 1;
   return 0;
+}
+
+/** Normalized stacked-front proportions; defaults to equal sections. */
+export function frontSectionFractions(u: Unit): number[] {
+  const count = Math.max(1, Math.min(3, u.frontSections ?? 1));
+  const ratios = (u.frontSectionRatios ?? [])
+    .slice(0, count)
+    .map((value) => (Number.isFinite(value) && value > 0 ? value : 0));
+  const total = ratios.reduce((sum, value) => sum + value, 0);
+  return total > 0 && ratios.length === count
+    ? ratios.map((value) => value / total)
+    : Array.from({ length: count }, () => 1 / count);
 }
 
 /** Resolve one leaf's settings, falling back to the cabinet-level values. */
@@ -366,7 +408,7 @@ export const UNIT_MOUNTS: { id: UnitMount; name: string; desc: string; y: number
   { id: "tall", name: "Tall Tower", desc: "Floor to top", y: 0, h: 220 },
 ];
 
-export const UNIT_LIMITS = { w: [30, 120], h: [40, 260], d: [25, 80], y: [0, 220] } as const;
+export const UNIT_LIMITS = { w: [30, 150], h: [40, 360], d: [25, 80], y: [0, 280] } as const;
 
 export const clampUnit = (u: Unit): Unit => ({
   ...u,
@@ -414,6 +456,142 @@ export const newUnit = (patch: Partial<Unit> = {}): Unit =>
     backsplashHeight: 60,
     ...patch,
   });
+
+/**
+ * Standard housing used when an appliance is placed as an individual module.
+ * The returned carcass is deliberately a normal `Unit`, so it gets the same
+ * drag, snap, duplicate, BOM and CNC behaviour as every other cabinet.
+ */
+export type ApplianceModuleSpec = {
+  w: number;
+  h: number;
+  d: number;
+  y: number;
+  mount: UnitMount;
+  front: UnitFront;
+  countertop: boolean;
+  countertopMaterial: CountertopMaterial;
+  faucet: boolean;
+  label: string;
+  applianceTypes: readonly ApplianceType[];
+};
+
+export function applianceModuleSpec(type: ApplianceType): ApplianceModuleSpec {
+  switch (type) {
+    case "fridge":
+      return {
+        w: 60,
+        h: 220,
+        d: 60,
+        y: 0,
+        mount: "tall",
+        front: "none",
+        countertop: false,
+        countertopMaterial: "stone",
+        faucet: false,
+        label: "Fridge tower",
+        applianceTypes: ["fridge"],
+      };
+    case "microwave":
+      return {
+        w: 60,
+        h: 80,
+        d: 40,
+        y: 140,
+        mount: "wall",
+        front: "none",
+        countertop: false,
+        countertopMaterial: "stone",
+        faucet: false,
+        label: "Built-in microwave wall module",
+        applianceTypes: ["microwave"],
+      };
+    case "extractor":
+      return {
+        w: 60,
+        h: 75,
+        d: 35,
+        y: 155,
+        mount: "wall",
+        front: "none",
+        countertop: false,
+        countertopMaterial: "stone",
+        faucet: false,
+        label: "Extractor wall module",
+        applianceTypes: ["extractor"],
+      };
+    case "washer":
+      return {
+        w: 60,
+        h: 80,
+        d: 60,
+        y: 0,
+        mount: "base",
+        front: "none",
+        countertop: true,
+        countertopMaterial: "stone",
+        faucet: false,
+        label: "Washing machine base module",
+        applianceTypes: ["washer"],
+      };
+    case "dishwasher":
+      return {
+        w: 60,
+        h: 80,
+        d: 60,
+        y: 0,
+        mount: "base",
+        front: "none",
+        countertop: true,
+        countertopMaterial: "stone",
+        faucet: false,
+        label: "Dishwasher base module",
+        applianceTypes: ["dishwasher"],
+      };
+    case "oven":
+      return {
+        w: 60,
+        h: 80,
+        d: 60,
+        y: 0,
+        mount: "base",
+        front: "none",
+        countertop: true,
+        countertopMaterial: "stone",
+        faucet: false,
+        label: "Oven + hob base module",
+        applianceTypes: ["oven", "hob"],
+      };
+    case "sink":
+      return {
+        w: 60,
+        h: 80,
+        d: 60,
+        y: 0,
+        mount: "base",
+        front: "door",
+        countertop: true,
+        countertopMaterial: "stone",
+        faucet: true,
+        label: "Sink base module",
+        applianceTypes: ["sink"],
+      };
+    case "hob":
+      return {
+        w: 60,
+        h: 80,
+        d: 60,
+        y: 0,
+        mount: "base",
+        front: "door",
+        countertop: true,
+        countertopMaterial: "stone",
+        faucet: false,
+        label: "Hob base module",
+        applianceTypes: ["hob"],
+      };
+  }
+}
 
 export const unitPrice = (u: Unit) =>
   u.standaloneAppliance

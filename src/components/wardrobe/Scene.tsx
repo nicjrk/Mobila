@@ -2534,7 +2534,8 @@ export default function Scene({
     <Canvas
       key={shape}
       shadows={!isMobile}
-      dpr={isMobile ? [1, 1.35] : [1, 1.75]}
+      dpr={isMobile ? [1, 1.15] : [1, 1.75]}
+      performance={{ min: isMobile ? 0.55 : 0.7, max: 1, debounce: 250 }}
       camera={{ position: [camDist * 0.55, 1.6 + span * 0.55, camDist], fov: 42 }}
       onPointerMissed={() => {
         setSel(null);
@@ -2548,12 +2549,12 @@ export default function Scene({
       <directionalLight
         position={[3.5, 5, 3]}
         intensity={2}
-        castShadow
-        shadow-mapSize={[2048, 2048]}
+        castShadow={!isMobile}
+        shadow-mapSize={isMobile ? [512, 512] : [2048, 2048]}
         shadow-bias={-0.0005}
       />
       <directionalLight position={[-4, 3, -2]} intensity={0.5} />
-      <Environment preset="apartment" />
+      <Environment preset="apartment" resolution={isMobile ? 64 : 128} frames={1} />
       <DimensionsContext.Provider value={config.showDimensions}>
         <group position={[0, -0.9, 0]}>
           <group
@@ -2617,7 +2618,7 @@ export default function Scene({
             scale={16}
             blur={2.4}
             far={4}
-            resolution={1024}
+            resolution={isMobile ? 256 : 1024}
           />
           <Grid
             position={[0, 0, 0]}

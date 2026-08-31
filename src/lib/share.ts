@@ -51,12 +51,17 @@ export function encodeConfig(c: Config): string {
       dsc: c.doorSections,
       ws: c.wallSpecs,
       um: c.usModules,
+      usp: c.underStairsPlinth,
+      use: c.underStairsExtraRun,
+      usu: c.underStairsExtraUnits,
       cw: c.colWidths,
       sp: c.splits,
       ch: c.colHeights,
       cd: c.colDepths,
       md: c.modules,
+      oc: c.openCells,
       mr: c.modularRoom,
+      cnc: c.cnc,
       un: c.units,
       it: c.items.map((i) => [i.bay, i.type, i.y, i.wall ?? "a"]),
     }),
@@ -67,6 +72,7 @@ export function decodeConfig(code: string): Config | null {
   try {
     const raw = JSON.parse(fromBase64Url(code));
     const base = defaultConfig();
+    const defaultCnc = base.cnc!;
     const items: InteriorItem[] = Array.isArray(raw.it)
       ? raw.it.map((t: [number, ItemType, number, WallId?]) => ({
           id: newId(),
@@ -122,6 +128,10 @@ export function decodeConfig(code: string): Config | null {
         Record<WallId, Partial<WallSpec>>
       >,
       usModules: Number(raw.um) || base.usModules,
+      underStairsPlinth: Number(raw.usp) || base.underStairsPlinth || 5,
+      underStairsExtraRun:
+        typeof raw.use === "boolean" ? raw.use : (base.underStairsExtraRun ?? false),
+      underStairsExtraUnits: Number(raw.usu) || base.underStairsExtraUnits || 0,
       colWidths: (raw.cw && typeof raw.cw === "object" ? raw.cw : {}) as Partial<
         Record<WallId, number[]>
       >,
@@ -129,6 +139,7 @@ export function decodeConfig(code: string): Config | null {
       colHeights: (raw.ch && typeof raw.ch === "object" ? raw.ch : {}) as Record<string, number>,
       colDepths: (raw.cd && typeof raw.cd === "object" ? raw.cd : {}) as Record<string, number>,
       modules: (raw.md && typeof raw.md === "object" ? raw.md : {}) as Record<string, ModuleType>,
+      openCells: (raw.oc && typeof raw.oc === "object" ? raw.oc : {}) as Record<string, boolean>,
       modularRoom:
         raw.mr && typeof raw.mr === "object"
           ? {
@@ -142,6 +153,17 @@ export function decodeConfig(code: string): Config | null {
           : base.modularRoom,
       units: (Array.isArray(raw.un) ? raw.un : []) as Unit[],
       items,
+      cnc:
+        raw.cnc && typeof raw.cnc === "object"
+          ? {
+              panelThickness: Number(raw.cnc.panelThickness) || defaultCnc.panelThickness,
+              backThickness: Number(raw.cnc.backThickness) || defaultCnc.backThickness,
+              kerf: Number(raw.cnc.kerf) || defaultCnc.kerf,
+              sheetWidth: Number(raw.cnc.sheetWidth) || defaultCnc.sheetWidth,
+              sheetHeight: Number(raw.cnc.sheetHeight) || defaultCnc.sheetHeight,
+              sheetMargin: Number(raw.cnc.sheetMargin) || defaultCnc.sheetMargin,
+            }
+          : defaultCnc,
     };
   } catch {
     return null;

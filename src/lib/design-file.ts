@@ -1,4 +1,11 @@
-import { dedupeUnitIds, defaultConfig, ROOM_SHAPES, type Config } from "@/lib/wardrobe";
+import {
+  applianceModuleSpec,
+  dedupeUnitIds,
+  defaultConfig,
+  ROOM_SHAPES,
+  type Config,
+  type Unit,
+} from "@/lib/wardrobe";
 
 export type DesignFile = {
   config: Config;
@@ -9,6 +16,36 @@ const isRecord = (value: unknown): value is Record<string, unknown> =>
   !!value && typeof value === "object" && !Array.isArray(value);
 
 const isFiniteNumber = (value: unknown) => typeof value === "number" && Number.isFinite(value);
+
+/** Convert legacy appliance-only units into normal cabinet modules on import/load. */
+function migrateLegacyAppliance(unit: Unit): Unit {
+  if (!unit.standaloneAppliance) return unit;
+  const type = unit.standaloneAppliance;
+  const spec = applianceModuleSpec(type);
+  const { standaloneAppliance: _legacyAppliance, ...base } = unit;
+  return {
+    ...base,
+    name: base.name ?? spec.label,
+    w: spec.w,
+    h: spec.h,
+    d: spec.d,
+    y: spec.y,
+    mount: spec.mount,
+    front: spec.front,
+    countertop: spec.countertop,
+    countertopMaterial: spec.countertopMaterial,
+    faucet: spec.faucet,
+    appliances: [
+      ...(base.appliances ?? []),
+      ...spec.applianceTypes.map((applianceType) => ({
+        id: `${unit.id}-${applianceType}`,
+        type: applianceType,
+        x: 0,
+        y: 4,
+      })),
+    ],
+  };
+}
 
 /** Parse the JSON format produced by the planner's export action. */
 export function parseDesignFile(raw: string): DesignFile {
@@ -52,7 +89,7 @@ export function parseDesignFile(raw: string): DesignFile {
     config: {
       ...defaultConfig(),
       ...incoming,
-      units: dedupeUnitIds(incoming.units),
+      units: dedupeUnitIds(incoming.units.map(migrateLegacyAppliance)),
       items: incoming.items,
     },
     ...(typeof projectName === "string" && projectName.trim() ? { projectName } : {}),

@@ -148,6 +148,15 @@
     color: var(--color-foreground);
     overflow-x: hidden;
   }
+
+  :focus-visible {
+    outline: 3px solid var(--color-ring);
+    outline-offset: 2px;
+  }
+
+  canvas {
+    display: block;
+  }
 }
 
 @media (max-width: 767px) {
@@ -166,6 +175,18 @@
   button,
   [role="button"] {
     touch-action: manipulation;
+    -webkit-tap-highlight-color: transparent;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  *,
+  *::before,
+  *::after {
+    animation-duration: 0.01ms !important;
+    animation-iteration-count: 1 !important;
+    scroll-behavior: auto !important;
+    transition-duration: 0.01ms !important;
   }
 }
 

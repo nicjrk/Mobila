@@ -33,6 +33,7 @@ export default function CameraRig({
   minDistance = 1.2,
   maxDistance = 26,
   touch = false,
+  profile = "default",
 }: {
   target: [number, number, number];
   focus?: FocusRequest;
@@ -41,6 +42,8 @@ export default function CameraRig({
   maxDistance?: number;
   /** Slightly slower rotate/zoom speeds tuned for fingers. */
   touch?: boolean;
+  /** Assembly profile uses a softer, wider-feeling navigation setup. */
+  profile?: "default" | "assembly";
 }) {
   const ref = useRef<Ctrl | null>(null);
   const camera = useThree((s) => s.camera);
@@ -105,6 +108,54 @@ export default function CameraRig({
     return () => window.removeEventListener("wardrobe-camera-preset", onPreset);
   }, [camera, maxDistance, minDistance]);
 
+  // Visible +/- controls are useful on phones and trackpads where a wheel is
+  // not always available. Animate the dolly so the camera never jumps.
+  useEffect(() => {
+    const onZoom = (event: Event) => {
+      const c = ref.current;
+      if (!c) return;
+      const requested = (event as CustomEvent<number>).detail;
+      const factor = Number.isFinite(requested) && requested > 0 ? requested : 1;
+      const offset = camera.position.clone().sub(c.target);
+      if (offset.lengthSq() < 1e-6) offset.set(1, 0.6, 1);
+      const nextDistance = THREE.MathUtils.clamp(
+        offset.length() * factor,
+        minDistance,
+        maxDistance,
+      );
+      anim.current = {
+        camTo: c.target.clone().add(offset.normalize().multiplyScalar(nextDistance)),
+        tgtTo: c.target.clone(),
+        t: 0,
+      };
+    };
+    window.addEventListener("wardrobe-camera-zoom", onZoom);
+    return () => window.removeEventListener("wardrobe-camera-zoom", onZoom);
+  }, [camera, maxDistance, minDistance]);
+
+  // A visible reset action is easier to discover on touch devices than the
+  // keyboard shortcut. Keep the current target and distance, but restore the
+  // familiar three-quarter perspective.
+  useEffect(() => {
+    const onReset = () => {
+      const c = ref.current;
+      if (!c) return;
+      const centre = c.target.clone();
+      const distance = THREE.MathUtils.clamp(
+        camera.position.distanceTo(centre),
+        minDistance,
+        maxDistance,
+      );
+      anim.current = {
+        camTo: centre.clone().add(new THREE.Vector3(distance * 0.72, distance * 0.48, distance)),
+        tgtTo: centre,
+        t: 0,
+      };
+    };
+    window.addEventListener("wardrobe-camera-reset", onReset);
+    return () => window.removeEventListener("wardrobe-camera-reset", onReset);
+  }, [camera, maxDistance, minDistance]);
+
   useFrame((_, dt) => {
     const c = ref.current;
     const a = anim.current;
@@ -125,11 +176,13 @@ export default function CameraRig({
       enabled={enabled}
       enablePan
       enableDamping
-      dampingFactor={0.08}
+      dampingFactor={profile === "assembly" ? 0.12 : 0.08}
       zoomToCursor
-      zoomSpeed={touch ? 0.7 : 0.9}
-      rotateSpeed={touch ? 0.55 : 0.85}
-      panSpeed={touch ? 0.8 : 1}
+      zoomSpeed={touch ? 0.68 : profile === "assembly" ? 0.82 : 0.9}
+      rotateSpeed={touch ? 0.52 : profile === "assembly" ? 0.72 : 0.85}
+      panSpeed={touch ? 0.78 : profile === "assembly" ? 0.9 : 1}
+      screenSpacePanning
+      minPolarAngle={0.18}
       minDistance={minDistance}
       maxDistance={maxDistance}
       maxPolarAngle={Math.PI / 2.05}

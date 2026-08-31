@@ -11,6 +11,7 @@
     "build": "vite build && node scripts/prepare-netlify-output.mjs",
     "build:dev": "vite build --mode development",
     "preview": "vite preview",
+    "supabase:check": "node scripts/check-supabase.mjs",
     "lint": "eslint .",
     "test": "vitest run",
     "format": "prettier --write ."

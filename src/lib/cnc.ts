@@ -39,7 +39,28 @@ export type CncCutlist = {
   parts: CncPart[];
   sheets: CncSheet[];
   oversized: CncPart[];
+  unsupported: CncUnsupported[];
   totalAreaM2: number;
+  /** Informational limitations that require a CAM/technical review before machining. */
+  camReviewReasons: CncReviewReason[];
+};
+
+export type CncReviewReason = { ro: string; en: string };
+
+export type CncValidationIssue = {
+  id: string;
+  severity: "error" | "warning";
+  message: string;
+  messageRo?: string;
+  partId?: string;
+  sheet?: number;
+};
+
+export type CncUnsupported = {
+  id: string;
+  label: string;
+  reason: string;
+  reasonRo?: string;
 };
 
 export const cncSettings = (config: Config): CncSettings => {
@@ -154,7 +175,7 @@ const fittingParts = (unit: Unit, cabinet: string, settings: CncSettings): CncPa
 
 export function partsForUnit(unit: Unit, index: number, settings: CncSettings): CncPart[] {
   if (unit.standaloneAppliance) return [];
-  const cabinet = `Cabinet ${index + 1}`;
+  const cabinet = unit.name?.trim() || `Cabinet ${index + 1}`;
   const thickness = settings.panelThickness / 10;
   const plinth = (unit.y ?? 0) <= 0 ? 6 : 0;
   const innerW = unit.w - 2 * thickness;
@@ -202,7 +223,11 @@ export function partsForUnit(unit: Unit, index: number, settings: CncSettings): 
   const stack = drawerStackHeight(unit);
   if (unit.drawers > 0) {
     const n = Math.max(1, unit.drawers);
-    const frontH = (bodyH - stack + stack) / n - 0.3;
+    // A full drawer unit fills the carcass; drawers below a door only occupy
+    // the configured lower stack. The old expression simplified to bodyH/n
+    // in both cases and made mixed drawer fronts almost a metre tall.
+    const frontStack = unit.front === "drawers" ? bodyH : stack;
+    const frontH = frontStack / n - 0.3;
     for (let i = 0; i < n; i++) {
       result.push(
         part(
@@ -450,6 +475,27 @@ export function buildCncCutlist(config: Config): CncCutlist {
     ...config.units.flatMap((unit, index) => partsForUnit(unit, index, settings)),
     ...partsForWallRuns(config, settings),
   ];
+  const unsupported: CncUnsupported[] = [
+    ...config.units
+      .filter((unit) => unit.underStairs)
+      .map((unit) => ({
+        id: `unsupported-${unit.id}`,
+        label: unit.name ?? `Cabinet ${unit.id}`,
+        reason: "Sloped cabinet profiles need a profile-aware DXF before machining.",
+        reasonRo: "Profilul înclinat al dulapului are nevoie de un DXF care știe să descrie panta.",
+      })),
+    ...(config.roomShape === "understairs"
+      ? [
+          {
+            id: "unsupported-understairs-run",
+            label: "Under-stairs wall run",
+            reason: "Sloped wall-run profiles need a profile-aware DXF before machining.",
+            reasonRo:
+              "Profilul înclinat de sub scară are nevoie de un DXF care știe să descrie panta.",
+          },
+        ]
+      : []),
+  ];
   const sheets = nestParts(
     parts.filter((item) => item.cnc),
     settings,
@@ -457,7 +503,28 @@ export function buildCncCutlist(config: Config): CncCutlist {
   const nestedIds = new Set(sheets.flatMap((sheet) => sheet.parts.map((item) => item.id)));
   const oversized = parts.filter((item) => item.cnc && !nestedIds.has(item.id));
   const totalAreaM2 = parts.reduce((sum, item) => sum + (item.width * item.height) / 1_000_000, 0);
-  return { settings, parts, sheets, oversized, totalAreaM2 };
+  const hasApplianceInstallations = config.units.some((unit) => (unit.appliances?.length ?? 0) > 0);
+  const camReviewReasons = parts.length
+    ? [
+        {
+          ro: "DXF-ul conține doar contururile și etichetele panourilor; traseele de tăiere nu sunt generate.",
+          en: "The DXF contains panel boundaries and labels only; cutting toolpaths are not generated.",
+        },
+        {
+          ro: "Găurile pentru feronerie, canturile, nuturile și îmbinările trebuie generate într-un profil CAM al utilajului.",
+          en: "Hardware drilling, edge banding, rebates and joinery must be generated in the machine's CAM profile.",
+        },
+        ...(hasApplianceInstallations
+          ? [
+              {
+                ro: "Decupajele pentru electrocasnice, ventilația și spațiile de service trebuie verificate după desenele producătorului.",
+                en: "Appliance cut-outs, ventilation and service clearances must be checked against the manufacturer's drawings.",
+              },
+            ]
+          : []),
+      ]
+    : [];
+  return { settings, parts, sheets, oversized, unsupported, totalAreaM2, camReviewReasons };
 }
 
 export function nestParts(parts: CncPart[], settings: CncSettings): CncSheet[] {
@@ -468,7 +535,9 @@ export function nestParts(parts: CncPart[], settings: CncSettings): CncSheet[] {
   const ordered = [...parts].sort((a, b) => b.width * b.height - a.width * a.height);
   ordered.forEach((item) => {
     const fitsNormal = item.width <= usableW && item.height <= usableH;
-    const fitsRotated = item.height <= usableW && item.width <= usableH;
+    // Rotating a vertical/horizontal-grain panel would change the visible
+    // grain direction on the finished cabinet. Only grain-free parts may turn.
+    const fitsRotated = item.grain === "none" && item.height <= usableW && item.width <= usableH;
     if (!fitsNormal && !fitsRotated) return;
     let placed: NestedPart | null = null;
     for (const sheet of sheets) {
@@ -478,7 +547,7 @@ export function nestParts(parts: CncPart[], settings: CncSettings): CncSheet[] {
       let bestRotated = false;
       for (let i = 0; i < spaces.length; i++) {
         const space = spaces[i]!;
-        for (const rotated of [false, true]) {
+        for (const rotated of item.grain === "none" ? [false, true] : [false]) {
           const width = rotated ? item.height : item.width;
           const height = rotated ? item.width : item.height;
           if (width + settings.kerf > space.width || height + settings.kerf > space.height)
@@ -524,7 +593,7 @@ export function nestParts(parts: CncPart[], settings: CncSettings): CncSheet[] {
     if (
       !placed &&
       ((item.width <= usableW && item.height <= usableH) ||
-        (item.height <= usableW && item.width <= usableH))
+        (item.grain === "none" && item.height <= usableW && item.width <= usableH))
     ) {
       const number = sheets.length + 1;
       sheets.push({ number, width: settings.sheetWidth, height: settings.sheetHeight, parts: [] });
@@ -559,4 +628,173 @@ export function nestParts(parts: CncPart[], settings: CncSettings): CncSheet[] {
     }
   });
   return sheets.filter((sheet) => sheet.parts.length > 0);
+}
+
+/**
+ * Machine-safety checks for the generated nesting result.
+ *
+ * This does not replace a CAM simulation or a physical test cut. It catches
+ * the errors the planner itself can prove: invalid dimensions, duplicate
+ * identifiers, parts outside the usable sheet and overlapping toolpaths.
+ */
+export function validateCncCutlist(cutlist: CncCutlist): CncValidationIssue[] {
+  const issues: CncValidationIssue[] = [];
+  const { settings, parts, sheets } = cutlist;
+  const usableW = settings.sheetWidth - 2 * settings.sheetMargin;
+  const usableH = settings.sheetHeight - 2 * settings.sheetMargin;
+  const partIds = new Set<string>();
+  const nestedIds = new Set<string>();
+
+  cutlist.unsupported.forEach((item) => {
+    issues.push({
+      id: `cnc-unsupported-${item.id}`,
+      severity: "error",
+      message: `${item.label}: ${item.reason}`,
+      ...(item.reasonRo ? { messageRo: item.label + ": " + item.reasonRo } : {}),
+    });
+  });
+
+  if (usableW <= 0 || usableH <= 0) {
+    issues.push({
+      id: "cnc-sheet-usable-area",
+      severity: "error",
+      message: `The ${settings.sheetMargin} mm sheet margin leaves no usable cutting area on a ${settings.sheetWidth} × ${settings.sheetHeight} mm sheet.`,
+      messageRo: `Marginea de ${settings.sheetMargin} mm nu lasă suprafață utilă pentru tăiere pe placa de ${settings.sheetWidth} × ${settings.sheetHeight} mm.`,
+    });
+  }
+
+  parts.forEach((item) => {
+    if (partIds.has(item.id)) {
+      issues.push({
+        id: `cnc-duplicate-${item.id}`,
+        severity: "error",
+        message: `Part "${item.label}" in cabinet "${item.cabinet}" has a duplicate internal CNC identifier. Re-import or duplicate the cabinet again to generate a new identifier.`,
+        messageRo: `Piesa „${item.label}” din dulapul „${item.cabinet}” are un identificator CNC intern duplicat. Reimportă sau duplică din nou dulapul pentru a genera un identificator nou.`,
+        partId: item.id,
+      });
+    }
+    partIds.add(item.id);
+    if (
+      !Number.isFinite(item.width) ||
+      !Number.isFinite(item.height) ||
+      !Number.isFinite(item.thickness) ||
+      item.width <= 0 ||
+      item.height <= 0 ||
+      item.thickness <= 0
+    ) {
+      issues.push({
+        id: `cnc-invalid-dimensions-${item.id}`,
+        severity: "error",
+        message: `Part "${item.label}" in cabinet "${item.cabinet}" has invalid CNC dimensions (${item.width} × ${item.height} × ${item.thickness} mm). Check the cabinet dimensions and board settings.`,
+        messageRo: `Piesa „${item.label}” din dulapul „${item.cabinet}” are dimensiuni CNC invalide (${item.width} × ${item.height} × ${item.thickness} mm). Verifică dimensiunile dulapului și setările materialului.`,
+        partId: item.id,
+      });
+    }
+  });
+
+  sheets.forEach((sheet) => {
+    const sheetIds = new Set<string>();
+    sheet.parts.forEach((item) => {
+      const width = item.rotated ? item.height : item.width;
+      const height = item.rotated ? item.width : item.height;
+      const minX = settings.sheetMargin - 0.1;
+      const minY = settings.sheetMargin - 0.1;
+      const maxX = sheet.width - settings.sheetMargin + 0.1;
+      const maxY = sheet.height - settings.sheetMargin + 0.1;
+      nestedIds.add(item.id);
+      if (sheetIds.has(item.id)) {
+        issues.push({
+          id: `cnc-sheet-duplicate-${sheet.number}-${item.id}`,
+          severity: "error",
+          message: `Sheet ${sheet.number} contains part "${item.label}" from cabinet "${item.cabinet}" twice. Remove the duplicate part before machining.`,
+          messageRo: `Placa ${sheet.number} conține de două ori piesa „${item.label}” din dulapul „${item.cabinet}”. Elimină piesa duplicată înainte de prelucrare.`,
+          partId: item.id,
+          sheet: sheet.number,
+        });
+      }
+      sheetIds.add(item.id);
+      if (item.cnc === false) {
+        issues.push({
+          id: `cnc-non-machined-${item.id}`,
+          severity: "error",
+          message: `Part "${item.label}" from cabinet "${item.cabinet}" is marked as non-CNC but was placed on sheet ${sheet.number}. Remove it from CNC nesting or mark it machinable.`,
+          messageRo: `Piesa „${item.label}” din dulapul „${item.cabinet}” este marcată ca neprelucrabilă CNC, dar a fost pusă pe placa ${sheet.number}. Scoate-o din nesting sau marcheaz-o ca prelucrabilă.`,
+          partId: item.id,
+          sheet: sheet.number,
+        });
+      }
+      if (
+        !Number.isFinite(item.x) ||
+        !Number.isFinite(item.y) ||
+        item.x < minX ||
+        item.y < minY ||
+        item.x + width > maxX ||
+        item.y + height > maxY
+      ) {
+        issues.push({
+          id: `cnc-outside-sheet-${item.id}`,
+          severity: "error",
+          message: `Part "${item.label}" from cabinet "${item.cabinet}" extends outside the usable area of sheet ${sheet.number}. Re-run nesting after changing the sheet or part dimensions.`,
+          messageRo: `Piesa „${item.label}” din dulapul „${item.cabinet}” depășește suprafața utilă a plăcii ${sheet.number}. Refă nestingul după modificarea plăcii sau a dimensiunilor piesei.`,
+          partId: item.id,
+          sheet: sheet.number,
+        });
+      }
+      if (item.rotated && item.grain !== "none") {
+        issues.push({
+          id: `cnc-grain-rotation-${item.id}`,
+          severity: "error",
+          message: `Part "${item.label}" from cabinet "${item.cabinet}" was rotated even though its grain direction is fixed. Keep the grain direction or use a grain-free material.`,
+          messageRo: `Piesa „${item.label}” din dulapul „${item.cabinet}” a fost rotită, deși fibra este fixă. Păstrează direcția fibrei sau folosește un material fără fibră direcționată.`,
+          partId: item.id,
+          sheet: sheet.number,
+        });
+      }
+    });
+
+    for (let i = 0; i < sheet.parts.length; i++) {
+      const first = sheet.parts[i];
+      if (!first) continue;
+      const firstW = first.rotated ? first.height : first.width;
+      const firstH = first.rotated ? first.width : first.height;
+      for (let j = i + 1; j < sheet.parts.length; j++) {
+        const second = sheet.parts[j];
+        if (!second) continue;
+        const secondW = second.rotated ? second.height : second.width;
+        const secondH = second.rotated ? second.width : second.height;
+        const overlaps =
+          first.x < second.x + secondW - 0.01 &&
+          second.x < first.x + firstW - 0.01 &&
+          first.y < second.y + secondH - 0.01 &&
+          second.y < first.y + firstH - 0.01;
+        if (overlaps) {
+          issues.push({
+            id: `cnc-overlap-${sheet.number}-${first.id}-${second.id}`,
+            severity: "error",
+            message: `Parts "${first.label}" from "${first.cabinet}" and "${second.label}" from "${second.cabinet}" overlap on sheet ${sheet.number}. Re-run nesting before machining.`,
+            messageRo: `Piesele „${first.label}” din „${first.cabinet}” și „${second.label}” din „${second.cabinet}” se suprapun pe placa ${sheet.number}. Refă nestingul înainte de prelucrare.`,
+            partId: first.id,
+            sheet: sheet.number,
+          });
+        }
+      }
+    }
+  });
+
+  parts.forEach((item) => {
+    if (
+      item.cnc &&
+      !nestedIds.has(item.id) &&
+      !cutlist.oversized.some((part) => part.id === item.id)
+    ) {
+      issues.push({
+        id: `cnc-unaccounted-${item.id}`,
+        severity: "error",
+        message: `Part "${item.label}" from cabinet "${item.cabinet}" is missing from the CNC sheets. Re-run nesting and check the sheet allocation.`,
+        messageRo: `Piesa „${item.label}” din dulapul „${item.cabinet}” lipsește din plăcile CNC. Refă nestingul și verifică repartizarea pe plăci.`,
+        partId: item.id,
+      });
+    }
+  });
+  return issues;
 }

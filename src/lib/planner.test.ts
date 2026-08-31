@@ -1,10 +1,20 @@
 import { describe, expect, it } from "vitest";
-import { footprintSize, snapUnit, snapUnitToRoom } from "@/lib/units";
+import {
+  footprintSize,
+  isUnitPlacementValid,
+  nextUnitX,
+  snapUnit,
+  snapUnitToRoom,
+} from "@/lib/units";
 import {
   billOfMaterials,
   DEFAULT_MODULAR_ROOM,
+  PRIMARY_WORKSPACES,
   defaultConfig,
   enterModular,
+  applianceModuleSpec,
+  frontSectionFractions,
+  leafCount,
   newUnit,
   totalPrice,
 } from "@/lib/wardrobe";
@@ -12,8 +22,15 @@ import { validateConfig } from "@/lib/validation";
 import { catalogProduct, skuForBomKey } from "@/lib/catalog";
 import { normalizeConfig, parseDesignFile } from "@/lib/design-file";
 import { KITCHEN_LAYOUT_PRESETS } from "@/lib/presets";
-import { buildCncCutlist, cncSettings, nestParts, partsForUnit } from "@/lib/cnc";
+import {
+  buildCncCutlist,
+  cncSettings,
+  nestParts,
+  partsForUnit,
+  validateCncCutlist,
+} from "@/lib/cnc";
 import { createDxf } from "@/lib/dxf";
+import { createCncManifestCsv } from "@/lib/cnc-manifest";
 import { decodeConfig, encodeConfig } from "@/lib/share";
 
 describe("modular planner core rules", () => {
@@ -169,6 +186,54 @@ describe("modular planner core rules", () => {
     const cutlist = buildCncCutlist({ ...config, units: [unit] });
     expect(cutlist.sheets.length).toBeGreaterThan(0);
     expect(cutlist.sheets.every((sheet) => sheet.parts.length > 0)).toBe(true);
+    expect(validateCncCutlist(cutlist)).toHaveLength(0);
+    expect(cutlist.camReviewReasons.length).toBeGreaterThan(0);
+  });
+
+  it("keeps mixed drawer fronts at the drawer-stack height", () => {
+    const config = enterModular(defaultConfig());
+    const unit = newUnit({
+      id: "mixed-drawers-cnc",
+      w: 60,
+      h: 200,
+      d: 60,
+      drawers: 2,
+      drawerHeight: 20,
+      front: "door",
+    });
+    const fronts = partsForUnit(unit, 0, cncSettings(config)).filter((item) =>
+      item.id.includes("drawer-front"),
+    );
+    expect(fronts).toHaveLength(2);
+    expect(fronts.every((item) => item.height < 250)).toBe(true);
+  });
+
+  it("flags drawer stacks that cannot fit below a door", () => {
+    const config = enterModular(defaultConfig());
+    const unit = newUnit({
+      id: "too-tall-drawers",
+      h: 80,
+      drawers: 3,
+      drawerHeight: 30,
+      front: "door",
+    });
+    expect(
+      validateConfig({ ...config, units: [unit] }).some((issue) =>
+        issue.id.includes("drawer-door-clearance"),
+      ),
+    ).toBe(true);
+  });
+
+  it("blocks flat CNC output for sloped under-stairs profiles", () => {
+    const config = enterModular(defaultConfig());
+    const cutlist = buildCncCutlist({
+      ...config,
+      units: [newUnit({ id: "sloped-unit", underStairs: true, slopeMinHeight: 90 })],
+    });
+    expect(cutlist.unsupported).toHaveLength(1);
+    expect(validateCncCutlist(cutlist).some((issue) => issue.id.includes("unsupported"))).toBe(
+      true,
+    );
   });
 
   it("includes wall-run shelves and drawer boxes in the CNC cut list", () => {
@@ -207,6 +272,32 @@ describe("modular planner core rules", () => {
     expect(sheets).toHaveLength(0);
   });
 
+  it("does not rotate panels with a fixed grain direction", () => {
+    const settings = {
+      panelThickness: 18,
+      backThickness: 3,
+      kerf: 4,
+      sheetWidth: 1000,
+      sheetHeight: 2200,
+      sheetMargin: 10,
+    };
+    const panel = {
+      id: "grain-panel",
+      label: "Grain panel",
+      cabinet: "Cabinet 1",
+      width: 1800,
+      height: 500,
+      thickness: 18,
+      grain: "vertical" as const,
+      cnc: true,
+    };
+    expect(nestParts([panel], settings)).toHaveLength(0);
+    expect(
+      nestParts([{ ...panel, id: "free-panel", grain: "none" as const }], settings)[0]?.parts[0]
+        ?.rotated,
+    ).toBe(true);
+  });
+
   it("keeps glass fronts in the cut list without nesting them for CNC", () => {
     const config = enterModular(defaultConfig());
     const unit = newUnit({ id: "glass-unit", front: "glass", doorMaterial: "clear" });
@@ -230,14 +321,88 @@ describe("modular planner core rules", () => {
     expect(decodedDrawers?.openDrawers).toBe(true);
   });
 
+  it("keeps advanced room and manufacturing settings in shared links", () => {
+    const source = {
+      ...defaultConfig(),
+      roomShape: "understairs" as const,
+      underStairsPlinth: 8,
+      underStairsExtraRun: true,
+      underStairsExtraUnits: 2,
+      openCells: { "a0:0": true },
+      cnc: {
+        panelThickness: 19,
+        backThickness: 4,
+        kerf: 3,
+        sheetWidth: 2500,
+        sheetHeight: 1850,
+        sheetMargin: 12,
+      },
+    };
+    const decoded = decodeConfig(encodeConfig(source));
+    expect(decoded?.underStairsPlinth).toBe(8);
+    expect(decoded?.underStairsExtraRun).toBe(true);
+    expect(decoded?.underStairsExtraUnits).toBe(2);
+    expect(decoded?.openCells).toEqual({ "a0:0": true });
+    expect(decoded?.cnc).toEqual(source.cnc);
+  });
+
   it("creates an R12 DXF with millimetre header, layers and polylines", () => {
     const config = enterModular(defaultConfig());
     const cutlist = buildCncCutlist({ ...config, units: [newUnit({ id: "dxf-unit" })] });
     const dxf = createDxf(cutlist, "Kitchen / Test");
     expect(dxf).toContain("$INSUNITS");
     expect(dxf).toContain("PANELS");
+    expect(dxf).toContain("CAM_REVIEW");
     expect(dxf).toContain("POLYLINE");
     expect(dxf).toContain("Kitchen / Test");
+  });
+
+  it("keeps the focused workspace list and carries cabinet names into CNC sheets", () => {
+    expect(PRIMARY_WORKSPACES.map((workspace) => workspace.id)).toEqual(["understairs", "modular"]);
+    const config = enterModular(defaultConfig());
+    const cutlist = buildCncCutlist({
+      ...config,
+      units: [newUnit({ id: "named-cabinet", name: "Tall fridge housing" })],
+    });
+    expect(cutlist.parts.every((item) => item.cabinet === "Tall fridge housing")).toBe(true);
+  });
+
+  it("replaces Kitchen 5 with the separated sketch modules", () => {
+    const layout = KITCHEN_LAYOUT_PRESETS.find((item) => item.id === "kitchen-5-sketch");
+    expect(layout).toBeDefined();
+    const units = layout!.units;
+    expect(units.filter((unit) => unit.w === 61).length).toBe(1);
+    expect(units.filter((unit) => unit.w === 75).length).toBe(3);
+    expect(units.filter((unit) => unit.w === 80).length).toBe(4);
+    expect(units.filter((unit) => unit.w === 90).length).toBe(2);
+    expect(units.filter((unit) => unit.w === 60).length).toBe(3);
+    const threeDoor = units.find((unit) => unit.frontLeaves === 3);
+    expect(threeDoor?.w).toBe(125);
+    expect(leafCount(newUnit(threeDoor ?? {}))).toBe(3);
+    expect(frontSectionFractions(newUnit(units[0] ?? {}))).toEqual([
+      100 / 340,
+      140 / 340,
+      100 / 340,
+    ]);
+    expect(units.find((unit) => unit.name?.includes("mașină de spălat"))?.appliances).toEqual([
+      expect.objectContaining({ type: "washer" }),
+    ]);
+    expect(units.find((unit) => unit.name?.toLowerCase().includes("corp l"))?.name).toContain(
+      "CORP L",
+    );
+  });
+
+  it("keeps the Aspire manifest traceable to a plate, cabinet and part", () => {
+    const config = enterModular(defaultConfig());
+    const cutlist = buildCncCutlist({
+      ...config,
+      units: [newUnit({ id: "manifest-unit", name: "Unit 1" })],
+    });
+    const manifest = createCncManifestCsv(cutlist, "Kitchen Test");
+    expect(manifest).toContain('"project","plate","cabinet","part_id"');
+    expect(manifest).toContain('"Kitchen Test"');
+    expect(manifest).toContain('"Unit 1"');
+    expect(manifest).toContain('"NESTED"');
   });
 
   it("imports exported designs and repairs duplicate unit ids", () => {
@@ -323,6 +488,59 @@ describe("modular planner core rules", () => {
     expect(bom[0]?.label).toContain("Freestanding");
   });
 
+  it("creates individual appliance modules with a real wooden housing", () => {
+    const spec = applianceModuleSpec("oven");
+    const module = newUnit({
+      id: "built-in-oven-module",
+      w: spec.w,
+      h: spec.h,
+      d: spec.d,
+      y: spec.y,
+      mount: spec.mount,
+      front: spec.front,
+      countertop: spec.countertop,
+      appliances: spec.applianceTypes.map((type, index) => ({
+        id: `appliance-${index}`,
+        type,
+        y: 4,
+      })),
+    });
+    const cutlist = buildCncCutlist({ ...enterModular(defaultConfig()), units: [module] });
+    const errors = validateCncCutlist(cutlist).filter((issue) => issue.severity === "error");
+
+    expect(module.standaloneAppliance).toBeUndefined();
+    expect(module.appliances?.map((appliance) => appliance.type)).toEqual(["oven", "hob"]);
+    expect(cutlist.parts.some((part) => part.id === "built-in-oven-module-left-side")).toBe(true);
+    expect(cutlist.parts.some((part) => part.id.includes("door"))).toBe(false);
+    expect(errors).toHaveLength(0);
+  });
+
+  it("migrates legacy appliance-only units to housing modules on import", () => {
+    const legacy = newUnit({ id: "legacy-oven", standaloneAppliance: "oven" });
+    const imported = parseDesignFile(
+      JSON.stringify({
+        config: { ...defaultConfig(), roomShape: "modular", units: [legacy], items: [] },
+      }),
+    ).config.units[0];
+
+    expect(imported?.standaloneAppliance).toBeUndefined();
+    expect(imported?.appliances?.map((appliance) => appliance.type)).toEqual(["oven", "hob"]);
+    expect(imported?.front).toBe("none");
+  });
+
+  it("keeps standard under-counter appliance modules valid", () => {
+    const config = enterModular(defaultConfig());
+    const module = newUnit({
+      id: "dishwasher-module",
+      h: 80,
+      countertop: true,
+      front: "none",
+      appliances: [{ id: "dishwasher", type: "dishwasher", y: 4 }],
+    });
+    const issues = validateConfig({ ...config, units: [module] });
+    expect(issues.some((issue) => issue.id.includes("dishwasher-bounds"))).toBe(false);
+  });
+
   it("does not generate CNC cabinet panels for freestanding appliances", () => {
     const config = enterModular(defaultConfig());
     const fridge = newUnit({ id: "free-cnc-fridge", standaloneAppliance: "fridge" });
@@ -357,6 +575,19 @@ describe("modular planner core rules", () => {
     );
   });
 
+  it("warns when built-in appliances lack a safe service depth", () => {
+    const config = enterModular(defaultConfig());
+    const unit = newUnit({
+      id: "shallow-appliance",
+      d: 50,
+      appliances: [{ id: "oven-1", type: "oven", y: 4 }],
+    });
+    const issues = validateConfig({ ...config, units: [unit] });
+    expect(
+      issues.some((issue) => issue.id === "shallow-appliance-appliance-oven-1-service-depth"),
+    ).toBe(true);
+  });
+
   it("snaps new cabinets to the nearest wall in the room envelope", () => {
     const cabinet = newUnit({ id: "room-cabinet", x: 0, z: 0, w: 60, d: 60 });
     const atBack = snapUnitToRoom(cabinet, [], DEFAULT_MODULAR_ROOM);
@@ -364,6 +595,25 @@ describe("modular planner core rules", () => {
     const nearLeft = snapUnitToRoom({ ...cabinet, x: -385, z: 100 }, [], DEFAULT_MODULAR_ROOM);
     expect(nearLeft.x).toBe(-370);
     expect(nearLeft.rot).toBe(cabinet.rot);
+  });
+
+  it("keeps free-placement cabinets free from magnetic wall snapping", () => {
+    const free = newUnit({ id: "free", snap: false, x: 0, z: 36 });
+    const placed = snapUnitToRoom(free, [], DEFAULT_MODULAR_ROOM);
+    expect(placed.z).toBe(36);
+  });
+
+  it("uses the rotated footprint when placing the next cabinet", () => {
+    const rotated = newUnit({ id: "rotated", rot: 90, x: 0, w: 40, d: 80 });
+    expect(footprintSize(rotated)).toEqual({ width: 80, depth: 40 });
+    expect(nextUnitX([rotated], 60)).toBe(70);
+  });
+
+  it("can distinguish a valid preview from a colliding preview", () => {
+    const first = newUnit({ id: "first", x: 0, z: 30 });
+    const moving = newUnit({ id: "moving", x: 0, z: 30 });
+    const preview = snapUnitToRoom(moving, [first], DEFAULT_MODULAR_ROOM, false);
+    expect(isUnitPlacementValid(preview, [first], DEFAULT_MODULAR_ROOM)).toBe(false);
   });
 
   it("uses rotated world dimensions when aligning and avoiding side-wall units", () => {

@@ -1,4 +1,4 @@
-import { fittingsOf, FITTING_META, innerHeight } from "@/lib/fittings";
+import { drawerStackHeight, fittingsOf, FITTING_META, innerHeight } from "@/lib/fittings";
 import {
   bayCountOf,
   bayHeights,
@@ -153,16 +153,16 @@ export function validateConfig(config: Config): ValidationIssue[] {
           unitId: unit.id,
         });
       }
-      // A standard integrated dishwasher is 82 cm including the worktop zone.
-      // In a base cabinet with a countertop, it sits beneath that top instead
-      // of being treated as an over-height tower.
-      const standardIntegratedDishwasher =
-        appliance.type === "dishwasher" &&
+      // Standard under-counter appliances sit beneath the worktop zone. Their
+      // nominal catalogue height can be slightly larger than the clear
+      // opening represented by the simplified cabinet shell.
+      const standardUndercounterAppliance =
+        (appliance.type === "dishwasher" || appliance.type === "washer") &&
         unit.mount === "base" &&
         unit.countertop &&
         appliance.y <= 4;
       if (
-        !standardIntegratedDishwasher &&
+        !standardUndercounterAppliance &&
         (appliance.y < 0 || appliance.y + applianceHeight > innerHeight(unit) + 0.01)
       ) {
         add({
@@ -186,6 +186,27 @@ export function validateConfig(config: Config): ValidationIssue[] {
           });
         }
       });
+
+      // A nominal cabinet depth is not enough for an appliance installation:
+      // most built-in appliances need a rear service/ventilation allowance.
+      // This remains a warning because the exact value belongs to the model's
+      // manufacturer sheet, but it prevents a false sense of CNC readiness.
+      if (needsWideBay && unit.d < 58) {
+        add({
+          id: `${unit.id}-appliance-${appliance.id}-service-depth`,
+          severity: "warning",
+          message: `${ITEM_META[appliance.type].name} should have at least 58 cm cabinet depth; verify the manufacturer's ventilation and service clearance.`,
+          unitId: unit.id,
+        });
+      }
+      if ((appliance.type === "sink" || appliance.type === "hob") && unit.w < 60) {
+        add({
+          id: `${unit.id}-appliance-${appliance.id}-worktop-width`,
+          severity: "warning",
+          message: `${ITEM_META[appliance.type].name} is in a ${Math.round(unit.w)} cm unit; verify the manufacturer's minimum worktop width.`,
+          unitId: unit.id,
+        });
+      }
     });
     const fullHeightAppliances = (unit.appliances ?? []).filter((appliance) =>
       ["fridge", "washer", "oven", "dishwasher", "microwave"].includes(appliance.type),
@@ -260,7 +281,14 @@ export function validateConfig(config: Config): ValidationIssue[] {
         unitId: unit.id,
       });
     }
-    if (unit.drawers > 0 && unit.front !== "drawers" && unit.h < 20 * unit.drawers + 10) {
+    const requestedDrawerStack =
+      Math.max(0, unit.drawers) *
+      Math.min(60, Math.max(8, unit.drawerHeight ?? FITTING_META.drawer.height));
+    if (
+      unit.drawers > 0 &&
+      unit.front !== "drawers" &&
+      drawerStackHeight(unit) + 0.01 < requestedDrawerStack
+    ) {
       add({
         id: `${unit.id}-drawer-door-clearance`,
         severity: "error",

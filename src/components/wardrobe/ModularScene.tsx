@@ -1,30 +1,32 @@
 import { Canvas, useFrame, useThree, type ThreeEvent } from "@react-three/fiber";
-import {
-  ContactShadows,
-  Environment,
-  Grid,
-  Html,
-  Line,
-  TransformControls,
-} from "@react-three/drei";
-import { lazy, memo, Suspense, useEffect, useMemo, useRef, useState } from "react";
+import { Environment, Grid, Html, Line, TransformControls } from "@react-three/drei";
+import { lazy, memo, Suspense, useCallback, useEffect, useMemo, useRef, useState } from "react";
 import * as THREE from "three";
 import type { FocusRequest } from "./CameraRig";
 
 const CameraRig = lazy(() => import("./CameraRig"));
+const LazyContactShadows = lazy(() =>
+  import("@react-three/drei/core/ContactShadows").then(({ ContactShadows }) => ({
+    default: ContactShadows,
+  })),
+);
 import {
   FINISHES,
+  frontSectionFractions,
+  leafCount,
   sectionSpec,
   ITEM_META,
+  isFrontAppliance,
   type DoorMaterial,
   type DoorStyle,
   type Fitting,
   type HandlePos,
   type HandleStyle,
   type ModularRoom,
+  type ApplianceType,
   type Unit,
 } from "@/lib/wardrobe";
-import { footprintSize, snapElevation, snapUnitToRoom } from "@/lib/units";
+import { footprintSize, isUnitPlacementValid, snapElevation, snapUnitToRoom } from "@/lib/units";
 import {
   drawerStackHeight,
   FITTING_META,
@@ -110,6 +112,68 @@ const Panel = memo(function Panel({
       <boxGeometry args={size} />
       <meshStandardMaterial {...material} />
     </mesh>
+  );
+});
+
+/** Small appliance faces make the kitchen modules readable without textures. */
+const ApplianceFace = memo(function ApplianceFace({
+  type,
+  width,
+  height,
+  depth,
+}: {
+  type: ApplianceType;
+  width: number;
+  height: number;
+  depth: number;
+}) {
+  const front = depth / 2 + 0.012;
+  if (type === "washer") {
+    const radius = Math.min(width * 0.3, height * 0.27, 0.22);
+    return (
+      <group position={[0, 0, front]}>
+        <mesh rotation={[Math.PI / 2, 0, 0]}>
+          <cylinderGeometry args={[radius, radius, 0.014, 32]} />
+          <meshStandardMaterial color="#293235" metalness={0.18} roughness={0.2} />
+        </mesh>
+        <mesh>
+          <torusGeometry args={[radius * 0.88, 0.012, 12, 32]} />
+          <meshStandardMaterial color="#aab4b6" metalness={0.7} roughness={0.2} />
+        </mesh>
+        <mesh position={[0, height * 0.33, 0.018]}>
+          <boxGeometry args={[Math.min(width * 0.48, 0.32), 0.018, 0.012]} />
+          <meshStandardMaterial color="#737b7d" metalness={0.45} roughness={0.25} />
+        </mesh>
+      </group>
+    );
+  }
+  if (type === "fridge") {
+    return (
+      <group position={[0, 0, front]}>
+        <mesh position={[width * 0.32, 0, 0.01]}>
+          <boxGeometry args={[0.018, Math.max(0.28, height * 0.62), 0.018]} />
+          <meshStandardMaterial color="#8d9698" metalness={0.8} roughness={0.24} />
+        </mesh>
+        <mesh position={[0, height * 0.2, 0.008]}>
+          <boxGeometry args={[width * 0.65, 0.012, 0.012]} />
+          <meshStandardMaterial color="#687174" metalness={0.35} roughness={0.28} />
+        </mesh>
+      </group>
+    );
+  }
+  const windowHeight = type === "oven" ? height * 0.42 : height * 0.58;
+  const windowWidth = Math.max(0.18, width * 0.72);
+  return (
+    <group position={[0, 0, front]}>
+      <mesh position={[0, type === "oven" ? -height * 0.03 : 0, 0.006]}>
+        <boxGeometry args={[windowWidth, windowHeight, 0.012]} />
+        <meshStandardMaterial color="#1f2729" metalness={0.25} roughness={0.18} />
+      </mesh>
+      <mesh position={[0, height * 0.31, 0.018]}>
+        <boxGeometry args={[Math.min(width * 0.64, 0.42), 0.014, 0.018]} />
+        <meshStandardMaterial color="#a0a9aa" metalness={0.82} roughness={0.22} />
+      </mesh>
+    </group>
   );
 });
 
@@ -470,10 +534,40 @@ type Interior = {
   onToggleEditInterior: () => void;
   selectedFitting: string | null;
   onSelectFitting: (id: string | null) => void;
+  onBeginTransaction: () => void;
+  onCommitTransaction: () => void;
+  onCancelTransaction: () => void;
   onMoveFitting: (unitId: string, fittingId: string, y: number, targetUnitId?: string) => void;
   onSelectDoor: (unitId: string | null) => void;
   onMoveHandle: (unitId: string, y: number) => void;
 };
+
+let sharedDrawerTexture: THREE.CanvasTexture | null = null;
+
+function getDrawerTexture() {
+  if (sharedDrawerTexture || typeof document === "undefined") return sharedDrawerTexture;
+  const canvas = document.createElement("canvas");
+  canvas.width = 128;
+  canvas.height = 64;
+  const context = canvas.getContext("2d");
+  if (!context) return null;
+  context.fillStyle = "#9b8064";
+  context.fillRect(0, 0, canvas.width, canvas.height);
+  for (let y = 3; y < canvas.height; y += 7) {
+    context.strokeStyle = y % 14 === 3 ? "rgba(60,42,28,.22)" : "rgba(255,240,210,.14)";
+    context.lineWidth = 1;
+    context.beginPath();
+    context.moveTo(0, y);
+    context.bezierCurveTo(32, y - 3, 86, y + 4, 128, y - 1);
+    context.stroke();
+  }
+  sharedDrawerTexture = new THREE.CanvasTexture(canvas);
+  sharedDrawerTexture.colorSpace = THREE.SRGBColorSpace;
+  sharedDrawerTexture.wrapS = THREE.RepeatWrapping;
+  sharedDrawerTexture.wrapT = THREE.RepeatWrapping;
+  sharedDrawerTexture.repeat.set(2.5, 1);
+  return sharedDrawerTexture;
+}
 
 /** Floating quick-action toolbar above the selected cabinet. */
 function UnitToolbar({
@@ -487,12 +581,17 @@ function UnitToolbar({
   interior: Interior;
   onEnableMove: () => void;
 }) {
-  const btn =
-    "flex size-7 items-center justify-center rounded-lg border border-border/70 bg-card/90 text-muted-foreground shadow-sm transition-colors hover:bg-secondary hover:text-foreground";
+  const isMobile = useIsMobile();
+  const btn = `flex ${isMobile ? "size-9" : "size-7"} shrink-0 items-center justify-center rounded-lg border border-border/70 bg-card/90 text-muted-foreground shadow-sm transition-colors hover:bg-secondary hover:text-foreground`;
   return (
     <Html center position={[0, (unit.y + unit.h) / 100 + 0.22, 0]} distanceFactor={5}>
-      <div className="flex items-center gap-1 rounded-xl border border-border/70 bg-card/85 p-1 shadow-md backdrop-blur-md">
-        <button className={`${btn} text-primary`} title="Move unit" onClick={onEnableMove}>
+      <div className="flex max-w-[calc(100vw-1rem)] items-center gap-1 overflow-x-auto rounded-xl border border-border/70 bg-card/85 p-1 shadow-md backdrop-blur-md">
+        <button
+          className={`${btn} text-primary`}
+          title="Move unit"
+          aria-label="Move unit"
+          onClick={onEnableMove}
+        >
           <Move3d className="size-3.5" />
         </button>
         <button
@@ -502,6 +601,7 @@ function UnitToolbar({
               ? "Edit Interior Only is ON — frame locked"
               : "Edit Interior Only (lock cabinet frame)"
           }
+          aria-label="Toggle interior editing"
           onClick={interior.onToggleEditInterior}
         >
           <Lock className="size-3.5" />
@@ -512,6 +612,7 @@ function UnitToolbar({
         <button
           className={`${btn} ${unit.open ? "border-primary text-primary" : ""}`}
           title={unit.open ? "Close doors" : "Open doors"}
+          aria-label={unit.open ? "Close doors" : "Open doors"}
           onClick={() => actions.onToggleOpen(unit.id)}
         >
           {unit.open ? <DoorOpen className="size-3.5" /> : <DoorClosed className="size-3.5" />}
@@ -520,6 +621,7 @@ function UnitToolbar({
           <button
             className={`${btn} ${unit.drawersOpen ? "border-primary text-primary" : ""}`}
             title={unit.drawersOpen ? "Close drawers" : "Open drawers"}
+            aria-label={unit.drawersOpen ? "Close drawers" : "Open drawers"}
             onClick={() => actions.onToggleDrawers(unit.id)}
           >
             <Archive className="size-3.5" />
@@ -529,6 +631,7 @@ function UnitToolbar({
         <button
           className={btn}
           title="Elevation +10 cm"
+          aria-label="Raise unit 10 centimetres"
           onClick={() => actions.onElevate(unit.id, 10)}
         >
           <MoveVertical className="size-3.5" />
@@ -536,6 +639,7 @@ function UnitToolbar({
         <button
           className={btn}
           title="Align to nearest wall"
+          aria-label="Align unit to nearest wall"
           onClick={() => actions.onAlignWall(unit.id)}
         >
           <AlignVerticalJustifyStart className="size-3.5" />
@@ -543,17 +647,24 @@ function UnitToolbar({
         <button
           className={`${btn} ${unit.snap ? "text-primary" : ""}`}
           title={unit.snap ? "Snapping on — click to free-place" : "Free placement — click to snap"}
+          aria-label={unit.snap ? "Disable snapping" : "Enable snapping"}
           onClick={() => actions.onToggleSnap(unit.id)}
         >
           <Magnet className="size-3.5" />
         </button>
         <span className="mx-0.5 h-5 w-px bg-border" aria-hidden="true" />
-        <button className={btn} title="Duplicate unit" onClick={() => actions.onDuplicate(unit.id)}>
+        <button
+          className={btn}
+          title="Duplicate unit"
+          aria-label="Duplicate unit"
+          onClick={() => actions.onDuplicate(unit.id)}
+        >
           <Copy className="size-3.5" />
         </button>
         <button
           className={`${btn} hover:text-destructive`}
           title="Delete unit"
+          aria-label="Delete unit"
           onClick={() => actions.onDelete(unit.id)}
         >
           <Trash2 className="size-3.5" />
@@ -638,32 +749,12 @@ const UnitMesh = memo(function UnitMesh({
   const doorTop = doorBase + doorBody;
   const doorFrontZ = D / 2 + (drawerStack > 0 ? 0.026 : 0.01);
   const drawerFrontZ = D / 2 + 0.05;
+  const frontFractions = frontSectionFractions(unit);
   const drawerProgress = useRef(0);
   const drawerGroups = useRef<Array<THREE.Group | null>>([]);
-  const drawerTexture = useMemo(() => {
-    if (typeof document === "undefined") return null;
-    const canvas = document.createElement("canvas");
-    canvas.width = 128;
-    canvas.height = 64;
-    const context = canvas.getContext("2d");
-    if (!context) return null;
-    context.fillStyle = "#9b8064";
-    context.fillRect(0, 0, canvas.width, canvas.height);
-    for (let y = 3; y < canvas.height; y += 7) {
-      context.strokeStyle = y % 14 === 3 ? "rgba(60,42,28,.22)" : "rgba(255,240,210,.14)";
-      context.lineWidth = 1;
-      context.beginPath();
-      context.moveTo(0, y);
-      context.bezierCurveTo(32, y - 3, 86, y + 4, 128, y - 1);
-      context.stroke();
-    }
-    const texture = new THREE.CanvasTexture(canvas);
-    texture.colorSpace = THREE.SRGBColorSpace;
-    texture.wrapS = THREE.RepeatWrapping;
-    texture.wrapT = THREE.RepeatWrapping;
-    texture.repeat.set(2.5, 1);
-    return texture;
-  }, []);
+  // One shared GPU texture keeps large kitchen layouts from allocating one
+  // canvas texture per cabinet/drawer stack.
+  const drawerTexture = useMemo(() => getDrawerTexture(), []);
   useFrame((_, dt) => {
     const target = drawersOpen || unit.drawersOpen ? 1 : 0;
     drawerProgress.current = THREE.MathUtils.damp(drawerProgress.current, target, 9, dt);
@@ -675,7 +766,8 @@ const UnitMesh = memo(function UnitMesh({
   const appliances = unit.appliances ?? [];
   const base = innerBase(unit) / 100;
   const innerH = innerHeight(unit) / 100;
-  const hasFront = unit.front !== "none";
+  const applianceOccupiesFront = appliances.some((appliance) => isFrontAppliance(appliance.type));
+  const hasFront = unit.front !== "none" && !applianceOccupiesFront;
   const handleY = Math.min(
     unit.h - 8,
     Math.max(plinth * 100 + 8, unit.handleY ?? Math.min(unit.h - 20, 100)),
@@ -716,7 +808,11 @@ const UnitMesh = memo(function UnitMesh({
             onSelect();
             return;
           }
-          if (!interior.editInterior) onDragStart(e);
+          if (!interior.editInterior) {
+            // Prevent OrbitControls from competing with a cabinet drag.
+            lockCamera();
+            onDragStart(e);
+          }
         }}
         onContextMenu={(e) => {
           e.stopPropagation();
@@ -731,6 +827,7 @@ const UnitMesh = memo(function UnitMesh({
             metalness={0.2}
           />
         </mesh>
+        <ApplianceFace type={appliance} width={W} height={H} depth={D} />
         <mesh position={[0, H * 0.48, D / 2 + 0.012]}>
           <boxGeometry args={[W * 0.78, Math.max(0.02, H * 0.03), 0.018]} />
           <meshStandardMaterial color="#555b5d" metalness={0.7} roughness={0.28} />
@@ -771,7 +868,11 @@ const UnitMesh = memo(function UnitMesh({
           onSelect();
           return;
         }
-        if (!interior.editInterior) onDragStart(e);
+        if (!interior.editInterior) {
+          // Prevent OrbitControls from competing with a cabinet drag.
+          lockCamera();
+          onDragStart(e);
+        }
       }}
       onContextMenu={(e) => {
         e.stopPropagation();
@@ -1008,10 +1109,12 @@ const UnitMesh = memo(function UnitMesh({
       {appliances.map((appliance) => {
         const applianceHeight = Math.min(ITEM_META[appliance.type].height, innerHeight(unit));
         const y = base + appliance.y / 100 + applianceHeight / 200;
-        const applianceX = Math.max(
-          -(W / 2 - 0.12),
-          Math.min(W / 2 - 0.12, (appliance.x ?? 0) / 100),
-        );
+        const applianceWidth = Math.max(0.2, W - 0.09);
+        const maxBuiltInOffset = Math.max(0, (W - applianceWidth) / 2 - 0.02);
+        const requestedX = (appliance.x ?? 0) / 100;
+        const applianceX = isFrontAppliance(appliance.type)
+          ? Math.max(-maxBuiltInOffset, Math.min(maxBuiltInOffset, requestedX))
+          : Math.max(-(W / 2 - 0.12), Math.min(W / 2 - 0.12, requestedX));
         const kitchenTop = unit.underStairs ? Math.min(leftTop, rightTop) : H;
         if (appliance.type === "sink" || appliance.type === "hob") {
           const isSink = appliance.type === "sink";
@@ -1059,7 +1162,7 @@ const UnitMesh = memo(function UnitMesh({
           <group key={appliance.id} position={[applianceX, y, 0]}>
             <mesh castShadow receiveShadow>
               <boxGeometry
-                args={[Math.max(0.2, W - 0.09), applianceHeight / 100, Math.max(0.2, D - 0.09)]}
+                args={[applianceWidth, applianceHeight / 100, Math.max(0.2, D - 0.09)]}
               />
               <meshStandardMaterial
                 color={appliance.type === "fridge" ? "#cbd5dc" : "#d9d9d5"}
@@ -1067,6 +1170,12 @@ const UnitMesh = memo(function UnitMesh({
                 metalness={0.18}
               />
             </mesh>
+            <ApplianceFace
+              type={appliance.type}
+              width={applianceWidth}
+              height={applianceHeight / 100}
+              depth={Math.max(0.2, D - 0.09)}
+            />
           </group>
         );
       })}
@@ -1132,16 +1241,23 @@ const UnitMesh = memo(function UnitMesh({
         />
       )}
       {unit.light && (
-        <Panel
-          size={[inner * 0.8, 0.012, 0.05]}
+        <mesh
           position={[0, (unit.underStairs ? Math.min(leftTop, rightTop) : H) - 0.05, D / 2 - 0.12]}
-          color="#fff6e2"
-          roughness={0.3}
-        />
+          raycast={() => null}
+        >
+          <boxGeometry args={[inner * 0.8, 0.012, 0.05]} />
+          <meshStandardMaterial
+            color="#fff6e2"
+            emissive="#ffd98a"
+            emissiveIntensity={0.7}
+            roughness={0.3}
+          />
+        </mesh>
       )}
 
       {/* fronts */}
       {unit.drawers > 0 &&
+        !applianceOccupiesFront &&
         Array.from({ length: Math.max(1, unit.drawers || 3) }, (_, i) => {
           const n = Math.max(1, unit.drawers || 3);
           // Leave a readable shadow gap between fronts. Without it the stack
@@ -1215,23 +1331,29 @@ const UnitMesh = memo(function UnitMesh({
             </group>
           );
         })}
-      {(unit.front === "door" || unit.front === "double") &&
-        (unit.front === "double" ? [-1, 1] : [0]).flatMap((s, li) => {
+      {!applianceOccupiesFront &&
+        (unit.front === "door" || unit.front === "double") &&
+        Array.from({ length: leafCount(unit) }, (_, li) => li).flatMap((li) => {
+          const leaves = leafCount(unit);
+          const leafOffset = li - (leaves - 1) / 2;
           const sections = Math.max(1, Math.min(3, unit.frontSections ?? 1));
-          const sectionHeight = doorBody / sections - 0.006;
           return Array.from({ length: sections }, (_, section) => {
             const L = sectionSpec(unit, li, section);
-            const sectionBase = doorBase + section * (doorBody / sections);
+            const sectionStart = frontFractions
+              .slice(0, section)
+              .reduce((sum, fraction) => sum + fraction, 0);
+            const sectionHeight = doorBody * (frontFractions[section] ?? 1 / sections) - 0.006;
+            const sectionBase = doorBase + doorBody * sectionStart;
             const sectionTop = sectionBase + sectionHeight;
             const handleMin = sectionBase + 0.08;
             const handleMax = Math.max(handleMin, sectionTop - 0.08);
             const ly = Math.min(handleMax, Math.max(handleMin, L.handleY / 100));
             return (
               <DoorLeaf
-                key={`${s}-${section}`}
-                width={unit.front === "double" ? W / 2 - 0.006 : W - 0.008}
+                key={`${li}-${section}`}
+                width={W / leaves - 0.006}
                 height={sectionHeight}
-                x={unit.front === "double" ? (s * W) / 4 : 0}
+                x={(leafOffset * W) / leaves}
                 y={sectionBase + sectionHeight / 2}
                 z={doorFrontZ}
                 hinge={L.hinge}
@@ -1256,11 +1378,15 @@ const UnitMesh = memo(function UnitMesh({
             );
           });
         })}
-      {unit.front === "glass" &&
+      {!applianceOccupiesFront &&
+        unit.front === "glass" &&
         Array.from({ length: Math.max(1, Math.min(3, unit.frontSections ?? 1)) }, (_, section) => {
           const sections = Math.max(1, Math.min(3, unit.frontSections ?? 1));
-          const sectionHeight = doorBody / sections - 0.006;
-          const sectionBase = doorBase + section * (doorBody / sections);
+          const sectionStart = frontFractions
+            .slice(0, section)
+            .reduce((sum, fraction) => sum + fraction, 0);
+          const sectionHeight = doorBody * (frontFractions[section] ?? 1 / sections) - 0.006;
+          const sectionBase = doorBase + doorBody * sectionStart;
           const sectionTop = sectionBase + sectionHeight;
           const L = sectionSpec(unit, 0, section);
           return (
@@ -1358,6 +1484,9 @@ export default function ModularScene({
   onSelect,
   onMove,
   onTransform,
+  beginTransaction,
+  commitTransaction,
+  cancelTransaction,
   actions,
   interior,
   showDimensions,
@@ -1371,25 +1500,39 @@ export default function ModularScene({
   onSelect: (id: string | null, additive?: boolean) => void;
   onMove: (id: string, x: number, z: number) => void;
   onTransform: (id: string, x: number, y: number, z: number) => void;
+  beginTransaction: () => void;
+  commitTransaction: () => void;
+  cancelTransaction: () => void;
   actions: Actions;
   interior: Interior;
   showDimensions: boolean;
   drawersOpen?: boolean;
   invalidUnitIds?: string[];
 }) {
-  const [drag, setDrag] = useState<{ id: string; dx: number; dz: number; preview: Unit } | null>(
-    null,
-  );
+  const [drag, setDrag] = useState<{
+    id: string;
+    dx: number;
+    dz: number;
+    preview: Unit;
+    valid: boolean;
+  } | null>(null);
+  const dragRef = useRef<typeof drag>(null);
   const [armedUnitId, setArmedUnitId] = useState<string | null>(null);
   const [fitDrag, setFitDrag] = useState<{ unitId: string; fittingId: string } | null>(null);
   const [handleDrag, setHandleDrag] = useState<{ unitId: string } | null>(null);
+  const lastTouchRef = useRef<{ id: string; time: number; x: number; y: number } | null>(null);
   /** Synchronous guard: the fitting handler runs before the frame handler in the same event. */
   const interactingRef = useRef(false);
   const [gizmoTarget, setGizmoTarget] = useState<THREE.Group | null>(null);
+  const gizmoTransactionRef = useRef(false);
   const [focus, setFocus] = useState<FocusRequest>(null);
   const isMobile = useIsMobile();
   const plane = useRef<THREE.Mesh>(null);
   const groups = useRef<Record<string, THREE.Group | null>>({});
+
+  useEffect(() => {
+    if (armedUnitId && selectedId !== armedUnitId) setArmedUnitId(null);
+  }, [armedUnitId, selectedId]);
 
   /** Centre the camera on a unit (double-click or the F key). */
   const focusUnit = (id: string | null) => {
@@ -1397,15 +1540,15 @@ export default function ModularScene({
     if (!u) return;
     setFocus({
       point: [u.x / 100, (u.y ?? 0) / 100 + u.h / 200 - 0.9, u.z / 100],
-      distance: Math.max(1.6, (u.w / 100) * 2.4),
+      distance: Math.max(2.6, (Math.max(u.w, u.h) / 100) * 1.8),
       key: Date.now(),
     });
   };
 
   const resetView = () => {
     setFocus({
-      point: [0, tallest * 0.4 - 0.9, 0],
-      distance: Math.max(3.2, span * 1.35),
+      point: [contentCentreX, tallest * 0.4 - 0.9, contentCentreZ],
+      distance: Math.max(4.6, span * 1.65),
       key: Date.now(),
     });
   };
@@ -1451,15 +1594,79 @@ export default function ModularScene({
   const contentCentreZ = (contentBounds.minZ + contentBounds.maxZ) / 2;
   const span = Math.max(2.8, contentWidth, contentDepth * 1.15);
   const tallest = Math.max(room.height / 100, ...units.map((u) => (u.y ?? 0) / 100 + u.h / 100));
+  // Keep the whole assembly comfortably inside the viewport, including the
+  // side returns of an L/U kitchen and the larger phone-safe canvas.
+  const initialDistance = Math.min(28, Math.max(5.2, span * 1.75));
+  const frameKey = `${room.width}:${room.depth}:${room.height}|${units.map((unit) => unit.id).join(",")}`;
+  const previousFrameKey = useRef(frameKey);
+
+  useEffect(() => {
+    if (previousFrameKey.current === frameKey) return;
+    previousFrameKey.current = frameKey;
+    if (!units.length) return;
+    setFocus({
+      point: [contentCentreX, tallest * 0.4 - 0.9, contentCentreZ],
+      distance: Math.max(4.6, span * 1.65),
+      key: Date.now(),
+    });
+  }, [frameKey, units.length, contentCentreX, contentCentreZ, span, tallest]);
 
   const startDrag = (u: Unit) => (e: ThreeEvent<PointerEvent>) => {
-    setDrag({
+    const next = {
       id: u.id,
       dx: u.x / 100 - e.point.x,
       dz: u.z / 100 - e.point.z,
       preview: u,
-    });
+      valid: true,
+    };
+    dragRef.current = next;
+    setDrag(next);
+    const target = e.target as unknown as {
+      setPointerCapture?: (pointerId: number) => void;
+    };
+    target.setPointerCapture?.(e.pointerId);
   };
+
+  const updateUnitDrag = (point: THREE.Vector3) => {
+    const current = dragRef.current;
+    if (!current) return;
+    const moving = units.find((u) => u.id === current.id);
+    if (!moving) return;
+    const raw = {
+      ...moving,
+      x: (point.x + current.dx) * 100,
+      z: (point.z + current.dz) * 100,
+    };
+    const preview = snapUnitToRoom(raw, units, room, false);
+    const next = {
+      ...current,
+      preview,
+      valid: isUnitPlacementValid(preview, units, room),
+    };
+    dragRef.current = next;
+    setDrag(next);
+  };
+
+  const finishUnitDrag = () => {
+    const current = dragRef.current;
+    if (!current) return;
+    if (current.valid) onMove(current.id, current.preview.x, current.preview.z);
+    dragRef.current = null;
+    setDrag(null);
+  };
+
+  // Releasing a finger outside the canvas must still commit the last valid
+  // position. Without this, a mobile drag can leave the editor in a stuck
+  // dragging state.
+  useEffect(() => {
+    if (!drag) return;
+    window.addEventListener("pointerup", finishUnitDrag);
+    window.addEventListener("pointercancel", finishUnitDrag);
+    return () => {
+      window.removeEventListener("pointerup", finishUnitDrag);
+      window.removeEventListener("pointercancel", finishUnitDrag);
+    };
+  }, [drag]); // eslint-disable-line react-hooks/exhaustive-deps
 
   /** Vertical drag plane in front of the assembly, used for fittings + handles. */
   const dragPlaneZ = Math.max(0.9, ...units.map((u) => u.z / 100 + u.d / 200 + 0.35));
@@ -1483,22 +1690,38 @@ export default function ModularScene({
     if (target.id !== u.id) setFitDrag({ unitId: target.id, fittingId: fitDrag!.fittingId });
   };
 
-  const endInteriorDrag = () => {
-    interactingRef.current = false;
-    setFitDrag(null);
-    setHandleDrag(null);
-  };
+  const endInteriorDrag = useCallback(
+    (cancel = false) => {
+      if (cancel) interior.onCancelTransaction();
+      else interior.onCommitTransaction();
+      interactingRef.current = false;
+      setFitDrag(null);
+      setHandleDrag(null);
+    },
+    [interior],
+  );
 
   /** A pointer released anywhere (also outside the canvas) always ends the interior drag. */
   useEffect(() => {
     const up = () => endInteriorDrag();
+    const cancel = () => endInteriorDrag(true);
     window.addEventListener("pointerup", up);
-    window.addEventListener("pointercancel", up);
+    window.addEventListener("pointercancel", cancel);
     return () => {
       window.removeEventListener("pointerup", up);
-      window.removeEventListener("pointercancel", up);
+      window.removeEventListener("pointercancel", cancel);
     };
-  }, []);
+  }, [endInteriorDrag]);
+
+  useEffect(() => {
+    const cancelGizmo = () => {
+      if (!gizmoTransactionRef.current) return;
+      gizmoTransactionRef.current = false;
+      cancelTransaction();
+    };
+    window.addEventListener("pointercancel", cancelGizmo);
+    return () => window.removeEventListener("pointercancel", cancelGizmo);
+  }, [cancelTransaction]);
 
   /** Outer X extents of the whole assembly, in cm — keeps labels clear of every cabinet. */
   const bounds = useMemo(
@@ -1524,13 +1747,40 @@ export default function ModularScene({
     onTransform(selectedId, snapped.x, snapElevation({ ...snapped, y: raw.y }, units), snapped.z);
   };
 
+  /** Mobile browsers do not all emit a reliable native double-click for touch. */
+  const handleTouchTap = (id: string, event: ThreeEvent<MouseEvent>) => {
+    const native = event.nativeEvent as MouseEvent & { pointerType?: string };
+    if (native.pointerType !== "touch") return;
+    const now = performance.now();
+    const previous = lastTouchRef.current;
+    const closeEnough =
+      previous &&
+      previous.id === id &&
+      now - previous.time < 420 &&
+      Math.hypot(native.clientX - previous.x, native.clientY - previous.y) < 36;
+    if (closeEnough) {
+      setArmedUnitId(id);
+      onSelect(id);
+      focusUnit(id);
+      lastTouchRef.current = null;
+    } else {
+      lastTouchRef.current = { id, time: now, x: native.clientX, y: native.clientY };
+    }
+  };
+
   return (
     <Canvas
+      style={{ touchAction: "none" }}
       shadows={!isMobile}
-      dpr={isMobile ? [1, 1.35] : [1, 1.75]}
+      dpr={isMobile ? [1, 1.15] : [1, 1.75]}
+      performance={{ min: isMobile ? 0.55 : 0.7, max: 1, debounce: 250 }}
       camera={{
-        position: [contentCentreX + span * 0.72, tallest * 0.82 + 0.7, contentCentreZ + span * 1.2],
-        fov: 42,
+        position: [
+          contentCentreX + initialDistance * 0.72,
+          Math.max(2.6, tallest * 0.78 + 0.8),
+          contentCentreZ + initialDistance * 1.1,
+        ],
+        fov: 46,
       }}
       onPointerMissed={() => {
         setArmedUnitId(null);
@@ -1539,16 +1789,16 @@ export default function ModularScene({
       gl={{ antialias: !isMobile, powerPreference: "high-performance" }}
     >
       <color attach="background" args={["#f7f4ef"]} />
-      <fog attach="fog" args={["#f7f4ef", 12, 36]} />
+      <fog attach="fog" args={["#f7f4ef", 16, 48]} />
       <ambientLight intensity={0.55} />
       <hemisphereLight args={["#fff4e0", "#e6e0d6", 0.5]} />
-      <Environment preset="apartment" />
+      <Environment preset="apartment" resolution={isMobile ? 64 : 128} frames={1} />
       <directionalLight
         position={[3.2, 5.2, 3.4]}
         intensity={2.1}
         color="#fff2df"
-        castShadow
-        shadow-mapSize={[2048, 2048]}
+        castShadow={!isMobile}
+        shadow-mapSize={isMobile ? [512, 512] : [2048, 2048]}
         shadow-bias={-0.0005}
       />
       <directionalLight position={[-4, 3, -2.5]} intensity={0.45} color="#eaf1ff" />
@@ -1561,25 +1811,12 @@ export default function ModularScene({
           rotation={[-Math.PI / 2, 0, 0]}
           position={[0, 0, 0]}
           onPointerMove={(e) => {
-            if (!drag) return;
+            if (!dragRef.current) return;
             e.stopPropagation();
-            const moving = units.find((u) => u.id === drag.id);
-            if (!moving) return;
-            const raw = {
-              ...moving,
-              x: (e.point.x + drag.dx) * 100,
-              z: (e.point.z + drag.dz) * 100,
-            };
-            const snapped = snapUnitToRoom(raw, units, room);
-            setDrag((current) => (current ? { ...current, preview: snapped } : current));
+            updateUnitDrag(e.point);
           }}
           onPointerUp={() => {
-            if (drag) onMove(drag.id, drag.preview.x, drag.preview.z);
-            setDrag(null);
-          }}
-          onPointerLeave={() => {
-            if (drag) onMove(drag.id, drag.preview.x, drag.preview.z);
-            setDrag(null);
+            finishUnitDrag();
           }}
         >
           <planeGeometry args={[40, 40]} />
@@ -1591,10 +1828,22 @@ export default function ModularScene({
           return (
             <group
               key={u.id}
+              onPointerMove={(e) => {
+                if (!dragRef.current) return;
+                e.stopPropagation();
+                updateUnitDrag(e.point);
+              }}
+              onPointerUp={(e) => {
+                if (!dragRef.current) return;
+                e.stopPropagation();
+                finishUnitDrag();
+              }}
+              onClick={(e) => handleTouchTap(u.id, e)}
               onDoubleClick={(e) => {
                 e.stopPropagation();
                 setArmedUnitId(u.id);
                 onSelect(u.id);
+                focusUnit(u.id);
               }}
             >
               <UnitMesh
@@ -1612,11 +1861,13 @@ export default function ModularScene({
                 interactingRef={interactingRef}
                 onFittingDown={(unit, f) => {
                   interactingRef.current = true;
+                  interior.onBeginTransaction();
                   onSelect(unit.id);
                   setFitDrag({ unitId: unit.id, fittingId: f.id });
                 }}
                 onHandleDown={(unit) => {
                   interactingRef.current = true;
+                  interior.onBeginTransaction();
                   setHandleDrag({ unitId: unit.id });
                 }}
                 outLeft={Math.max(0, u.x - u.w / 2 - bounds.min) / 100}
@@ -1624,8 +1875,45 @@ export default function ModularScene({
                 showDimensions={showDimensions}
                 drawersOpen={drawersOpen}
                 invalid={invalidUnitIds.includes(u.id)}
-                movable={armedUnitId === u.id}
+                movable={armedUnitId === u.id || (selectedId === u.id && !interior.editInterior)}
               />
+              {drag?.id === u.id && (
+                <>
+                  <mesh
+                    position={[displayUnit.x / 100, 0.008, displayUnit.z / 100]}
+                    rotation={[0, (displayUnit.rot * Math.PI) / 180, 0]}
+                    raycast={() => null}
+                  >
+                    <boxGeometry
+                      args={[
+                        footprintSize(displayUnit).width / 100,
+                        0.012,
+                        footprintSize(displayUnit).depth / 100,
+                      ]}
+                    />
+                    <meshBasicMaterial
+                      color={drag.valid ? "#6f9c82" : "#c74b4b"}
+                      transparent
+                      opacity={0.22}
+                    />
+                  </mesh>
+                  {!drag.valid && (
+                    <Html
+                      center
+                      position={[
+                        displayUnit.x / 100,
+                        (displayUnit.y + displayUnit.h) / 100 + 0.18,
+                        displayUnit.z / 100,
+                      ]}
+                      distanceFactor={5}
+                    >
+                      <span className="whitespace-nowrap rounded-full border border-red-300 bg-red-50 px-2 py-1 text-[10px] font-semibold text-red-700 shadow-sm">
+                        Position occupied or outside room
+                      </span>
+                    </Html>
+                  )}
+                </>
+              )}
             </group>
           );
         })}
@@ -1635,32 +1923,46 @@ export default function ModularScene({
             position={[0, 1.4, dragPlaneZ]}
             onPointerMove={onDragPlaneMove}
             onPointerUp={endInteriorDrag}
-            onPointerLeave={endInteriorDrag}
+            onPointerCancel={() => endInteriorDrag(true)}
           >
             <planeGeometry args={[60, 24]} />
             <meshBasicMaterial transparent opacity={0} depthWrite={false} />
           </mesh>
         )}
 
-        {gizmoTarget && !fitDrag && !handleDrag && (
+        {/* Direct touch dragging is easier to control than the desktop gizmo. */}
+        {gizmoTarget && !isMobile && !fitDrag && !handleDrag && (
           <TransformControls
             object={gizmoTarget}
             mode="translate"
             size={isMobile ? 1.35 : 0.75}
             translationSnap={0.01}
-            onMouseUp={commitGizmo}
-            onObjectChange={commitGizmo}
+            onMouseDown={() => {
+              if (!gizmoTransactionRef.current) {
+                gizmoTransactionRef.current = true;
+                beginTransaction();
+              }
+            }}
+            onMouseUp={() => {
+              commitGizmo();
+              gizmoTransactionRef.current = false;
+              commitTransaction();
+            }}
           />
         )}
 
-        <ContactShadows
-          position={[0, 0.003, 0]}
-          opacity={0.42}
-          scale={18}
-          blur={2.6}
-          far={4}
-          resolution={1024}
-        />
+        {!isMobile && (
+          <Suspense fallback={null}>
+            <LazyContactShadows
+              position={[0, 0.003, 0]}
+              opacity={0.42}
+              scale={18}
+              blur={2.6}
+              far={4}
+              resolution={1024}
+            />
+          </Suspense>
+        )}
         <Grid
           args={[26, 26]}
           cellSize={0.25}
@@ -1678,7 +1980,8 @@ export default function ModularScene({
           touch={isMobile}
           focus={focus}
           minDistance={1.4}
-          maxDistance={20}
+          maxDistance={32}
+          profile="assembly"
           target={[contentCentreX, tallest * 0.42 - 0.9, contentCentreZ]}
         />
       </Suspense>

@@ -38,11 +38,15 @@ const rectangle = (x: number, y: number, width: number, height: number, layer: s
     pair(8, layer),
   ].join("\n");
 
-export function createDxf(cutlist: CncCutlist, projectName = "Project"): string {
+export function createDxf(
+  cutlist: CncCutlist,
+  projectName = "Project",
+  sheets = cutlist.sheets,
+): string {
   const entities: string[] = [];
   const gap = 300;
-  cutlist.sheets.forEach((sheet) => {
-    const offsetX = (sheet.number - 1) * (sheet.width + gap);
+  sheets.forEach((sheet, index) => {
+    const offsetX = index * (sheet.width + gap);
     entities.push(rectangle(offsetX, 0, sheet.width, sheet.height, "SHEET"));
     entities.push(
       text(
@@ -53,6 +57,17 @@ export function createDxf(cutlist: CncCutlist, projectName = "Project"): string 
         "NOTES",
       ),
     );
+    cutlist.camReviewReasons.forEach((reason, index) => {
+      entities.push(
+        text(
+          offsetX + 20,
+          sheet.height - 52 - index * 18,
+          `CAM REVIEW RO: ${reason.ro} | EN: ${reason.en}`,
+          8,
+          "CAM_REVIEW",
+        ),
+      );
+    });
     sheet.parts.forEach((item: NestedPart) => {
       const width = item.rotated ? item.height : item.width;
       const height = item.rotated ? item.width : item.height;
@@ -63,9 +78,9 @@ export function createDxf(cutlist: CncCutlist, projectName = "Project"): string 
       entities.push(text(x + width / 2, item.y + height / 2, label, textHeight));
     });
   });
-  const layers = ["PANELS", "LABELS", "SHEET", "NOTES"]
+  const layers = ["PANELS", "LABELS", "SHEET", "NOTES", "CAM_REVIEW"]
     .map((name, index) =>
-      [pair(0, "LAYER"), pair(2, name), pair(70, 0), pair(62, [7, 3, 8, 1][index]!)].join("\n"),
+      [pair(0, "LAYER"), pair(2, name), pair(70, 0), pair(62, [7, 3, 8, 1, 1][index]!)].join("\n"),
     )
     .join("\n");
   const tables = [
@@ -96,3 +111,6 @@ export function createDxf(cutlist: CncCutlist, projectName = "Project"): string 
 }
 
 export const dxfFileName = (projectName: string) => `${clean(projectName)}-panels.dxf`;
+
+export const dxfSheetFileName = (projectName: string, sheetNumber: number) =>
+  `${clean(projectName)}-plate-${String(sheetNumber).padStart(2, "0")}.dxf`;

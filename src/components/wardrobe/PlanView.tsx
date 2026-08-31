@@ -1,6 +1,7 @@
-import { useMemo, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { planBounds, planItems, type PlanItem } from "@/lib/plan";
 import { ITEM_META, type Config, type WallId } from "@/lib/wardrobe";
+import { isUnitPlacementValid, snapUnitToRoom } from "@/lib/units";
 
 const SCALE = 2.4;
 
@@ -10,7 +11,10 @@ export default function PlanView({
   activeWall,
   activeBay,
   setActive,
-  setConfig,
+  setConfigTransient,
+  beginTransaction,
+  commitTransaction,
+  cancelTransaction,
   setSelectedUnit,
   showGrid = true,
 }: {
@@ -19,14 +23,23 @@ export default function PlanView({
   activeWall: WallId;
   activeBay: number;
   setActive: (wall: WallId, bay: number) => void;
-  setConfig: (fn: (config: Config) => Config) => void;
+  setConfigTransient: (fn: (config: Config) => Config) => void;
+  beginTransaction: () => void;
+  commitTransaction: () => void;
+  cancelTransaction: () => void;
   setSelectedUnit: (id: string | null) => void;
   showGrid?: boolean;
 }) {
-  const drag = useRef<{ id: string; startX: number; startZ: number; x: number; z: number } | null>(
-    null,
-  );
+  const drag = useRef<{
+    id: string;
+    startX: number;
+    startZ: number;
+    x: number;
+    z: number;
+    valid: boolean;
+  } | null>(null);
   const [armedId, setArmedId] = useState<string | null>(null);
+  const [dragState, setDragState] = useState<{ id: string; valid: boolean } | null>(null);
   const items = useMemo(
     () => planItems(config, selectedUnitId, activeWall, activeBay),
     [config, selectedUnitId, activeWall, activeBay],
@@ -67,7 +80,10 @@ export default function PlanView({
       startZ: local.y,
       x: item.x,
       z: item.z,
+      valid: true,
     };
+    setDragState({ id: item.id, valid: true });
+    beginTransaction();
     event.currentTarget.setPointerCapture(event.pointerId);
   };
 
@@ -82,15 +98,46 @@ export default function PlanView({
     const local = point.matrixTransform(matrix);
     const dx = (local.x - current.startX) / SCALE;
     const dz = -(local.y - current.startZ) / SCALE;
-    setConfig((next) => ({
+    const unit = config.units.find((candidate) => candidate.id === current.id);
+    if (!unit) return;
+    const candidate = snapUnitToRoom(
+      { ...unit, x: current.x + dx, z: current.z + dz },
+      config.units,
+      config.modularRoom,
+      false,
+    );
+    const valid = isUnitPlacementValid(candidate, config.units, config.modularRoom);
+    current.valid = valid;
+    setDragState({ id: current.id, valid });
+    setConfigTransient((next) => ({
       ...next,
-      units: next.units.map((unit) =>
-        unit.id === current.id
-          ? { ...unit, x: Math.round(current.x + dx), z: Math.round(current.z + dz) }
-          : unit,
-      ),
+      units: next.units.map((unit) => (unit.id === current.id ? candidate : unit)),
     }));
   };
+
+  const finishUnitDrag = useCallback(
+    (cancel = false) => {
+      const current = drag.current;
+      if (!current) return;
+      if (cancel || !current.valid) cancelTransaction();
+      else commitTransaction();
+      drag.current = null;
+      setDragState(null);
+    },
+    [cancelTransaction, commitTransaction],
+  );
+
+  useEffect(() => {
+    if (!drag.current) return;
+    const onPointerUp = () => finishUnitDrag();
+    const onPointerCancel = () => finishUnitDrag(true);
+    window.addEventListener("pointerup", onPointerUp);
+    window.addEventListener("pointercancel", onPointerCancel);
+    return () => {
+      window.removeEventListener("pointerup", onPointerUp);
+      window.removeEventListener("pointercancel", onPointerCancel);
+    };
+  }, [finishUnitDrag]);
 
   return (
     <div className="flex h-full min-h-0 flex-col bg-[#f6f4f0] p-3">
@@ -98,16 +145,23 @@ export default function PlanView({
         <span>2D Plan · top view</span>
         <span>Click to select · drag modular units to move</span>
       </div>
+      {dragState && !dragState.valid && (
+        <div className="mb-2 rounded-lg border border-red-300 bg-red-50 px-3 py-2 text-xs font-medium text-red-700">
+          Position occupied or outside the room. Release to cancel.
+        </div>
+      )}
       <div className="min-h-0 flex-1 overflow-hidden rounded-xl border border-border bg-[#fbfaf7] shadow-inner">
         <svg
           viewBox={`0 0 ${width} ${height}`}
           className="h-full w-full touch-none"
+          role="application"
+          aria-label="Interactive top view plan"
           onPointerMove={move}
           onPointerUp={() => {
-            drag.current = null;
+            finishUnitDrag();
           }}
           onPointerCancel={() => {
-            drag.current = null;
+            finishUnitDrag(true);
           }}
         >
           <defs>
@@ -140,6 +194,7 @@ export default function PlanView({
           )}
           {items.map((item) => {
             const selected = item.selected;
+            const isDragging = dragState?.id === item.id;
             const w = item.width * SCALE;
             const d = item.depth * SCALE;
             const unit =
@@ -167,8 +222,16 @@ export default function PlanView({
                   width={w}
                   height={d}
                   rx={4}
-                  fill={item.kind === "unit" ? "#d9e9de" : "#e8e1d6"}
-                  stroke={selected ? "#2f6d5a" : "#8d9b91"}
+                  fill={
+                    isDragging && !dragState.valid
+                      ? "#f5d9d7"
+                      : item.kind === "unit"
+                        ? "#d9e9de"
+                        : "#e8e1d6"
+                  }
+                  stroke={
+                    isDragging && !dragState.valid ? "#c74b4b" : selected ? "#2f6d5a" : "#8d9b91"
+                  }
                   strokeWidth={selected ? 3 : 1.5}
                 />
                 {unit?.appliances?.map((appliance) => {
@@ -215,6 +278,11 @@ export default function PlanView({
                       {Math.round(item.width)} × {Math.round(item.depth)} cm
                     </text>
                   </>
+                )}
+                {isDragging && !dragState.valid && (
+                  <text x={0} y={-d / 2 - 6} textAnchor="middle" fontSize="8" fill="#b33f3f">
+                    Invalid position
+                  </text>
                 )}
               </g>
             );

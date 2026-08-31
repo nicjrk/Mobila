@@ -18,7 +18,7 @@ import {
   type Unit,
   type WallId,
 } from "@/lib/wardrobe";
-import { alignToWall, nextUnitX, snapUnitToRoom } from "@/lib/units";
+import { alignToWall, footprintSize, nextUnitX, snapUnitToRoom } from "@/lib/units";
 import { addFitting, fittingsOf, moveFitting, removeFitting } from "@/lib/fittings";
 import {
   loadPresets,
@@ -52,6 +52,7 @@ import { useIsMobile } from "@/hooks/use-mobile";
 import { useHistoryState } from "@/hooks/use-history-state";
 import { validateConfig } from "@/lib/validation";
 import { normalizeConfig, parseDesignFile } from "@/lib/design-file";
+import { downloadBlob, downloadDataUrl } from "@/lib/download";
 import {
   loadRecentProjects,
   removeRecentProject,
@@ -82,6 +83,9 @@ import {
   Grid3X3,
   Eye,
   EyeOff,
+  RotateCcw,
+  ZoomIn,
+  ZoomOut,
 } from "lucide-react";
 
 const Scene = lazy(() => import("@/components/wardrobe/Scene"));
@@ -116,7 +120,9 @@ function Planner() {
   const configHistory = useHistoryState<Config>(defaultConfig());
   const config = configHistory.value;
   const setConfigState = configHistory.setValue;
-  const { undo, redo } = configHistory;
+  const setConfigTransient = configHistory.setTransient;
+  const { undo, redo, beginTransaction, commitTransaction, cancelTransaction, isTransaction } =
+    configHistory;
   const [activeBay, setActiveBay] = useState(0);
   const [activeWall, setActiveWall] = useState<WallId>("a");
   const [doorSel, setDoorSel] = useState<DoorSel>(null);
@@ -170,7 +176,14 @@ function Planner() {
     setSelectedUnit(id);
     setSelectedUnitIds([id]);
   };
-  const setConfig = (fn: (c: Config) => Config) => setConfigState((c) => fn(c));
+  const setConfig = useCallback(
+    (fn: (c: Config) => Config) => setConfigState((c) => fn(c)),
+    [setConfigState],
+  );
+  const setConfigTransientValue = useCallback(
+    (fn: (c: Config) => Config) => setConfigTransient((c) => fn(c)),
+    [setConfigTransient],
+  );
 
   const total = totalPrice(config);
 
@@ -218,6 +231,7 @@ function Planner() {
   }, []);
 
   useEffect(() => {
+    if (isTransaction) return;
     setSaveState("unsaved");
     const timer = window.setTimeout(() => {
       try {
@@ -228,52 +242,72 @@ function Planner() {
       }
     }, 450);
     return () => window.clearTimeout(timer);
-  }, [config]);
+  }, [config, isTransaction]);
 
-  const patchUnit = (id: string, p: Partial<Unit>) =>
-    setConfigState((c) => ({
-      ...c,
-      units: c.units.map((u) => (u.id === id ? { ...u, ...p } : u)),
-    }));
+  const patchUnit = useCallback(
+    (id: string, p: Partial<Unit>) =>
+      setConfigState((c) => ({
+        ...c,
+        units: c.units.map((u) => (u.id === id ? { ...u, ...p } : u)),
+      })),
+    [setConfigState],
+  );
 
-  const interior = {
-    editInterior,
-    onToggleEditInterior: () => {
-      setEditInterior((v) => {
-        toast(v ? "Frame unlocked" : "Edit Interior Only — cabinet frame locked");
-        return !v;
-      });
-    },
-    selectedFitting,
-    onSelectFitting: setSelectedFitting,
-    onMoveFitting: (unitId: string, fittingId: string, y: number, targetUnitId?: string) =>
-      setConfigState((c) => {
-        const src = c.units.find((u) => u.id === unitId);
-        if (!src) return c;
-        const fit = fittingsOf(src).find((f) => f.id === fittingId) ?? null;
-        if (targetUnitId && targetUnitId !== unitId && fit) {
+  const interior = useMemo(
+    () => ({
+      editInterior,
+      onToggleEditInterior: () => {
+        setEditInterior((v) => {
+          toast(v ? "Frame unlocked" : "Edit Interior Only — cabinet frame locked");
+          return !v;
+        });
+      },
+      selectedFitting,
+      onSelectFitting: setSelectedFitting,
+      onBeginTransaction: beginTransaction,
+      onCommitTransaction: commitTransaction,
+      onCancelTransaction: cancelTransaction,
+      onMoveFitting: (unitId: string, fittingId: string, y: number, targetUnitId?: string) =>
+        setConfigTransient((c) => {
+          const src = c.units.find((u) => u.id === unitId);
+          if (!src) return c;
+          const fit = fittingsOf(src).find((f) => f.id === fittingId) ?? null;
+          if (targetUnitId && targetUnitId !== unitId && fit) {
+            return {
+              ...c,
+              units: c.units.map((u) =>
+                u.id === unitId
+                  ? removeFitting(u, fittingId)
+                  : u.id === targetUnitId
+                    ? addFitting(u, fit.type, y, fittingId)
+                    : u,
+              ),
+            };
+          }
           return {
             ...c,
-            units: c.units.map((u) =>
-              u.id === unitId
-                ? removeFitting(u, fittingId)
-                : u.id === targetUnitId
-                  ? addFitting(u, fit.type, y, fittingId)
-                  : u,
-            ),
+            units: c.units.map((u) => (u.id === unitId ? moveFitting(u, fittingId, y) : u)),
           };
-        }
-        return {
+        }),
+      onSelectDoor: (id: string | null) => {
+        setDoorUnit(id);
+        if (id) setSelectedUnit(id);
+      },
+      onMoveHandle: (unitId: string, y: number) =>
+        setConfigTransient((c) => ({
           ...c,
-          units: c.units.map((u) => (u.id === unitId ? moveFitting(u, fittingId, y) : u)),
-        };
-      }),
-    onSelectDoor: (id: string | null) => {
-      setDoorUnit(id);
-      if (id) setSelectedUnit(id);
-    },
-    onMoveHandle: (unitId: string, y: number) => patchUnit(unitId, { handleY: Math.round(y) }),
-  };
+          units: c.units.map((u) => (u.id === unitId ? { ...u, handleY: Math.round(y) } : u)),
+        })),
+    }),
+    [
+      editInterior,
+      selectedFitting,
+      beginTransaction,
+      commitTransaction,
+      cancelTransaction,
+      setConfigTransient,
+    ],
+  );
 
   /** Drop a brand-new standalone cabinet into the scene and select it. */
   const addCabinet = (front: Unit["front"] = "door") => {
@@ -314,7 +348,7 @@ function Planner() {
                 ),
               }
             : {}),
-          x: src.x + src.w,
+          x: src.x + footprintSize(src).width,
           z: src.z,
         });
         const placed = snapUnitToRoom(clone, c.units, c.modularRoom);
@@ -326,55 +360,58 @@ function Planner() {
     [setConfigState],
   );
 
-  const unitActions = {
-    onRotate: (id: string) =>
-      setConfigState((c) => {
-        const current = c.units.find((u) => u.id === id);
-        if (!current) return c;
-        const rotated = { ...current, rot: (current.rot + 90) % 360 };
-        const placed = snapUnitToRoom(rotated, c.units, c.modularRoom);
-        return { ...c, units: c.units.map((u) => (u.id === id ? placed : u)) };
-      }),
-    onDuplicate: (id: string) => {
-      const src = config.units.find((u) => u.id === id);
-      if (src) pasteUnit(src);
-    },
-    onDelete: (id: string) => {
-      setConfigState((c) => ({ ...c, units: c.units.filter((u) => u.id !== id) }));
-      setSelectedUnit(null);
-      toast("Unit removed");
-    },
-    onAlignWall: (id: string) =>
-      setConfigState((c) => {
-        const current = c.units.find((u) => u.id === id);
-        if (!current) return c;
-        const placed = snapUnitToRoom(alignToWall(current), c.units, c.modularRoom);
-        return { ...c, units: c.units.map((u) => (u.id === id ? placed : u)) };
-      }),
-    onToggleOpen: (id: string) =>
-      setConfigState((c) => {
-        const next = !c.units.find((u) => u.id === id)?.open;
-        return {
+  const unitActions = useMemo(
+    () => ({
+      onRotate: (id: string) =>
+        setConfigState((c) => {
+          const current = c.units.find((u) => u.id === id);
+          if (!current) return c;
+          const rotated = { ...current, rot: (current.rot + 90) % 360 };
+          const placed = snapUnitToRoom(rotated, c.units, c.modularRoom);
+          return { ...c, units: c.units.map((u) => (u.id === id ? placed : u)) };
+        }),
+      onDuplicate: (id: string) => {
+        const src = config.units.find((u) => u.id === id);
+        if (src) pasteUnit(src);
+      },
+      onDelete: (id: string) => {
+        setConfigState((c) => ({ ...c, units: c.units.filter((u) => u.id !== id) }));
+        setSelectedUnit(null);
+        toast("Unit removed");
+      },
+      onAlignWall: (id: string) =>
+        setConfigState((c) => {
+          const current = c.units.find((u) => u.id === id);
+          if (!current) return c;
+          const placed = snapUnitToRoom(alignToWall(current), c.units, c.modularRoom);
+          return { ...c, units: c.units.map((u) => (u.id === id ? placed : u)) };
+        }),
+      onToggleOpen: (id: string) =>
+        setConfigState((c) => {
+          const next = !c.units.find((u) => u.id === id)?.open;
+          return {
+            ...c,
+            units: c.units.map((u) => (u.id === id ? { ...u, open: next } : u)),
+          };
+        }),
+      onToggleDrawers: (id: string) =>
+        setConfigState((c) => ({
           ...c,
-          units: c.units.map((u) => (u.id === id ? { ...u, open: next } : u)),
-        };
-      }),
-    onToggleDrawers: (id: string) =>
-      setConfigState((c) => ({
-        ...c,
-        units: c.units.map((u) => (u.id === id ? { ...u, drawersOpen: !u.drawersOpen } : u)),
-      })),
-    onToggleSnap: (id: string) =>
-      setConfigState((c) => ({
-        ...c,
-        units: c.units.map((u) => (u.id === id ? { ...u, snap: u.snap === false } : u)),
-      })),
-    onElevate: (id: string, delta: number) => {
-      const u = config.units.find((x) => x.id === id);
-      if (u) patchUnit(id, { y: Math.max(0, (u.y ?? 0) + delta) });
-    },
-    onSavePreset: (id: string) => setPresetTarget(id),
-  };
+          units: c.units.map((u) => (u.id === id ? { ...u, drawersOpen: !u.drawersOpen } : u)),
+        })),
+      onToggleSnap: (id: string) =>
+        setConfigState((c) => ({
+          ...c,
+          units: c.units.map((u) => (u.id === id ? { ...u, snap: u.snap === false } : u)),
+        })),
+      onElevate: (id: string, delta: number) => {
+        const u = config.units.find((x) => x.id === id);
+        if (u) patchUnit(id, { y: Math.max(0, (u.y ?? 0) + delta) });
+      },
+      onSavePreset: (id: string) => setPresetTarget(id),
+    }),
+    [config.units, pasteUnit, patchUnit, setConfigState],
+  );
 
   const presetUnit = config.units.find((u) => u.id === presetTarget) ?? null;
 
@@ -389,7 +426,10 @@ function Planner() {
   const insertPreset = (p: CabinetPreset) => {
     const id = newUnit().id;
     setConfigState((c) => {
-      const u = { ...unitFromPreset(p, nextUnitX(c.units, p.unit.w), c.units[0]?.z ?? 0), id };
+      const u = {
+        ...unitFromPreset(p, nextUnitX(c.units, footprintSize(p.unit).width), c.units[0]?.z ?? 0),
+        id,
+      };
       return {
         ...c,
         roomShape: "modular",
@@ -579,11 +619,11 @@ function Planner() {
 
   // Ține link-ul din bara de adrese mereu sincronizat cu designul curent.
   useEffect(() => {
-    if (projectId) return;
+    if (projectId || isTransaction) return;
     const url = new URL(window.location.href);
     url.search = `?d=${encodeConfig(config)}`;
     window.history.replaceState(null, "", url.toString());
-  }, [config, projectId]);
+  }, [config, projectId, isTransaction]);
 
   // Salvează în cloud (creează prima dată, apoi actualizează).
   const saveToCloud = async (): Promise<string | null> => {
@@ -668,11 +708,11 @@ function Planner() {
     const url = id ? projectUrl(id) : buildShareUrl(config);
     try {
       await navigator.clipboard.writeText(url);
-      toast.success("Link copied", {
-        description: "Send it to your client so they can edit the design.",
+      toast.success("Link copiat / Link copied", {
+        description: "Trimite linkul clientului pentru a vedea și edita configurația.",
       });
     } catch {
-      window.prompt("Copy the design link:", url);
+      window.prompt("Copiază linkul proiectului / Copy project link:", url);
     }
   };
 
@@ -688,13 +728,11 @@ function Planner() {
       total,
       billOfMaterials: billOfMaterials(config),
     };
-    const blob = new Blob([JSON.stringify(payload, null, 2)], { type: "application/json" });
-    const url = URL.createObjectURL(blob);
-    const link = document.createElement("a");
-    link.href = url;
-    link.download = `${projectName.trim().replace(/\s+/g, "-").toLowerCase() || "wardrobe-design"}.json`;
-    link.click();
-    URL.revokeObjectURL(url);
+    const filename = `${projectName.trim().replace(/\s+/g, "-").toLowerCase() || "wardrobe-design"}.json`;
+    downloadBlob(
+      new Blob([JSON.stringify(payload, null, 2)], { type: "application/json" }),
+      filename,
+    );
     toast.success("Design exported", {
       description: "Configuration and bill of materials included.",
     });
@@ -735,12 +773,7 @@ function Planner() {
     const csv = rows
       .map((row) => row.map((cell) => `"${cell.replaceAll('"', '""')}"`).join(","))
       .join("\n");
-    const url = URL.createObjectURL(new Blob([csv], { type: "text/csv" }));
-    const link = document.createElement("a");
-    link.href = url;
-    link.download = "wardrobe-bom.csv";
-    link.click();
-    URL.revokeObjectURL(url);
+    downloadBlob(new Blob([csv], { type: "text/csv" }), "wardrobe-bom.csv");
     toast.success("BOM exported as CSV");
   };
 
@@ -750,10 +783,7 @@ function Planner() {
       toast.error("3D viewport is not ready");
       return;
     }
-    const link = document.createElement("a");
-    link.download = "wardrobe-preview.png";
-    link.href = canvas.toDataURL("image/png");
-    link.click();
+    downloadDataUrl(canvas.toDataURL("image/png"), "wardrobe-preview.png");
     toast.success("Preview exported as PNG");
   };
 
@@ -875,7 +905,10 @@ function Planner() {
             activeWall={activeWall}
             activeBay={activeBay}
             setActive={setActive}
-            setConfig={setConfig}
+            setConfigTransient={setConfigTransientValue}
+            beginTransaction={beginTransaction}
+            commitTransaction={commitTransaction}
+            cancelTransaction={cancelTransaction}
             setSelectedUnit={setSelectedUnit}
             showGrid={showGrid && !cleanPreview}
           />
@@ -896,6 +929,9 @@ function Planner() {
             selectedId={selectedUnit}
             selectedIds={selectedUnitIds}
             onSelect={selectModularUnit}
+            beginTransaction={beginTransaction}
+            commitTransaction={commitTransaction}
+            cancelTransaction={cancelTransaction}
             onMove={(id, x, z) =>
               setConfigState((c) => ({
                 ...c,
@@ -1026,8 +1062,44 @@ function Planner() {
         variant="outline"
         size="icon"
         className="size-9 bg-card/90 backdrop-blur"
-        aria-label={cleanPreview ? "Exit clean preview" : "Clean preview"}
-        title={cleanPreview ? "Exit clean preview" : "Clean preview"}
+        aria-label="Reset camera"
+        title="Reset camera"
+        onClick={() => window.dispatchEvent(new CustomEvent("wardrobe-camera-reset"))}
+      >
+        <RotateCcw className="size-4" />
+      </Button>
+      <div className="flex items-center gap-1 rounded-lg border border-border bg-card/90 p-1 backdrop-blur">
+        <Button
+          variant="ghost"
+          size="icon"
+          className="size-7 sm:size-8"
+          aria-label="Zoom in"
+          title="Zoom in"
+          onClick={() =>
+            window.dispatchEvent(new CustomEvent("wardrobe-camera-zoom", { detail: 0.78 }))
+          }
+        >
+          <ZoomIn className="size-3.5 sm:size-4" />
+        </Button>
+        <Button
+          variant="ghost"
+          size="icon"
+          className="size-7 sm:size-8"
+          aria-label="Zoom out"
+          title="Zoom out"
+          onClick={() =>
+            window.dispatchEvent(new CustomEvent("wardrobe-camera-zoom", { detail: 1.28 }))
+          }
+        >
+          <ZoomOut className="size-3.5 sm:size-4" />
+        </Button>
+      </div>
+      <Button
+        variant="outline"
+        size="icon"
+        className="size-9 bg-card/90 backdrop-blur"
+        aria-label={cleanPreview ? "Exit clean preview" : "Open client presentation"}
+        title={cleanPreview ? "Exit client presentation" : "Open client presentation"}
         onClick={() => setCleanPreview((value) => !value)}
       >
         {cleanPreview ? <EyeOff className="size-4" /> : <Eye className="size-4" />}
@@ -1119,8 +1191,8 @@ function Planner() {
     <div className="pointer-events-none absolute bottom-3 left-1/2 flex max-w-[92%] -translate-x-1/2 items-center gap-2 rounded-full px-3 py-1.5 glass-bar text-center text-[11px] text-muted-foreground shadow-sm">
       <MousePointer2 className="size-3.5 shrink-0" />
       {isMobile
-        ? "One finger rotates · two fingers pinch to zoom and pan · double-tap a cabinet to focus"
-        : "Drag or right-drag to orbit · Shift+drag or middle-drag to pan · scroll to zoom · double-click / F to focus"}
+        ? "One finger rotates · two fingers zoom/pan · select then drag a cabinet · double-tap to focus"
+        : "Select then drag a cabinet · right-drag to orbit · Shift/middle-drag to pan · scroll to zoom · double-click / F to focus"}
     </div>
   );
 

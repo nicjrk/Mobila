@@ -14,6 +14,13 @@ export type ProjectVersion = { id: string; createdAt: string; config: Config };
 const STORAGE_KEY = "wardrobe-recent-projects-v1";
 const MAX_RECENT = 8;
 
+function localId() {
+  if (typeof crypto !== "undefined" && typeof crypto.randomUUID === "function") {
+    return crypto.randomUUID();
+  }
+  return `local-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 10)}`;
+}
+
 export function loadRecentProjects(): RecentProject[] {
   try {
     const raw = JSON.parse(localStorage.getItem(STORAGE_KEY) ?? "[]") as unknown;
@@ -40,7 +47,7 @@ export function loadRecentProjects(): RecentProject[] {
                     return versionConfig
                       ? [
                           {
-                            id: candidate.id ?? crypto.randomUUID(),
+                            id: candidate.id ?? localId(),
                             createdAt: candidate.createdAt ?? new Date(0).toISOString(),
                             config: versionConfig,
                           },
@@ -49,7 +56,7 @@ export function loadRecentProjects(): RecentProject[] {
                   })
                 : [
                     {
-                      id: crypto.randomUUID(),
+                      id: localId(),
                       createdAt: value.updatedAt ?? new Date(0).toISOString(),
                       config,
                     },
@@ -73,10 +80,7 @@ export function saveRecentProject(config: Config, name: string): RecentProject[]
       ...existing,
       updatedAt: now,
       config,
-      versions: [{ id: crypto.randomUUID(), createdAt: now, config }, ...existing.versions].slice(
-        0,
-        20,
-      ),
+      versions: [{ id: localId(), createdAt: now, config }, ...existing.versions].slice(0, 20),
     };
     const next = [updated, ...projects.filter((project) => project.id !== existing.id)].slice(
       0,
@@ -90,11 +94,11 @@ export function saveRecentProject(config: Config, name: string): RecentProject[]
     return next;
   }
   const project: RecentProject = {
-    id: crypto.randomUUID(),
+    id: localId(),
     name: normalizedName,
     updatedAt: now,
     config,
-    versions: [{ id: crypto.randomUUID(), createdAt: now, config }],
+    versions: [{ id: localId(), createdAt: now, config }],
   };
   const next = [project, ...projects].slice(0, MAX_RECENT);
   try {

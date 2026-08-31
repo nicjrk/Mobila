@@ -20,10 +20,13 @@ const overlapsY = (a: Unit, b: Unit) => a.y < (b.y ?? 0) + b.h && (b.y ?? 0) < a
  * Smart edge snapping: side panels glue to neighbouring cabinets, backs align
  * to the wall line, and elevations of wall units line up with each other.
  */
-export function snapUnit(moving: Unit, all: Unit[]): Unit {
+export function snapUnit(moving: Unit, all: Unit[], resolveCollisions = true): Unit {
   const x = round(moving.x);
   let z = round(moving.z);
-  if (moving.snap === false) return avoidOverlap(clampUnit({ ...moving, x, z }), all);
+  if (moving.snap === false) {
+    const freePlacement = clampUnit({ ...moving, x, z });
+    return resolveCollisions ? avoidOverlap(freePlacement, all) : freePlacement;
+  }
 
   const movingFootprint = footprintSize(moving);
 
@@ -55,12 +58,25 @@ export function snapUnit(moving: Unit, all: Unit[]): Unit {
       z = alignedZ;
     }
   }
-  return avoidOverlap(clampUnit({ ...moving, x: round(snappedX), z: round(z) }), all);
+  const snapped = clampUnit({ ...moving, x: round(snappedX), z: round(z) });
+  return resolveCollisions ? avoidOverlap(snapped, all) : snapped;
 }
 
 /** Snap a cabinet to the nearest room wall as well as neighbouring cabinets. */
-export function snapUnitToRoom(moving: Unit, all: Unit[], room: ModularRoom): Unit {
-  const snapped = snapUnit(moving, all);
+export function snapUnitToRoom(
+  moving: Unit,
+  all: Unit[],
+  room: ModularRoom,
+  resolveCollisions = true,
+): Unit {
+  const snapped = snapUnit(moving, all, resolveCollisions);
+  // `snap: false` means free placement: containment and collision protection
+  // still apply, but the cabinet must not magnetically jump to a room wall.
+  if (moving.snap === false) {
+    return resolveCollisions
+      ? keepUnitInRoom(snapped, all, room)
+      : containUnit(clampUnit(snapped), room);
+  }
   const footprint = footprintSize(snapped);
   const candidates = [
     { axis: "z" as const, value: footprint.depth / 2 },
@@ -78,7 +94,7 @@ export function snapUnitToRoom(moving: Unit, all: Unit[], room: ModularRoom): Un
     bestDistance = distance;
     best = { ...best, [candidate.axis]: candidate.value };
   }
-  return keepUnitInRoom(best, all, room);
+  return resolveCollisions ? keepUnitInRoom(best, all, room) : containUnit(best, room);
 }
 
 /* ---------------- Collision guard ---------------- */
@@ -92,6 +108,14 @@ const intersects = (a: Unit, b: Unit) => {
   const oy = (a.y ?? 0) < (b.y ?? 0) + b.h - gap && (b.y ?? 0) < (a.y ?? 0) + a.h - gap;
   return ox && oz && oy;
 };
+
+/** Return true when a candidate can be committed without leaving the room or overlapping. */
+export function isUnitPlacementValid(moving: Unit, all: Unit[], room: ModularRoom): boolean {
+  const contained = containUnit(moving, room);
+  const staysInside =
+    Math.abs(contained.x - moving.x) < 0.01 && Math.abs(contained.z - moving.z) < 0.01;
+  return staysInside && !all.some((other) => other.id !== moving.id && intersects(moving, other));
+}
 
 /** Keep the complete world-space footprint inside the room envelope. */
 export function containUnit(u: Unit, room: ModularRoom): Unit {
@@ -209,13 +233,21 @@ export function alignToWall(u: Unit): Unit {
 /** Place a brand-new unit flush to the right of the current assembly. */
 export function nextUnitX(units: Unit[], w: number): number {
   if (units.length === 0) return 0;
-  const rightMost = units.reduce((a, b) => (a.x + a.w / 2 > b.x + b.w / 2 ? a : b));
-  return rightMost.x + rightMost.w / 2 + w / 2;
+  const rightMost = units.reduce((a, b) => {
+    const aRight = a.x + footprintSize(a).width / 2;
+    const bRight = b.x + footprintSize(b).width / 2;
+    return aRight > bRight ? a : b;
+  });
+  return rightMost.x + footprintSize(rightMost).width / 2 + w / 2;
 }
 
 /** Place a brand-new unit flush to the left of the current assembly. */
 export function previousUnitX(units: Unit[], w: number): number {
   if (units.length === 0) return 0;
-  const leftMost = units.reduce((a, b) => (a.x - a.w / 2 < b.x - b.w / 2 ? a : b));
-  return leftMost.x - leftMost.w / 2 - w / 2;
+  const leftMost = units.reduce((a, b) => {
+    const aLeft = a.x - footprintSize(a).width / 2;
+    const bLeft = b.x - footprintSize(b).width / 2;
+    return aLeft < bLeft ? a : b;
+  });
+  return leftMost.x - footprintSize(leftMost).width / 2 - w / 2;
 }
