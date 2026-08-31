@@ -418,11 +418,10 @@ const BUILT_IN_KITCHEN_LAYOUT_PRESETS: KitchenLayoutPreset[] = [
 ];
 
 /**
- * Kitchen 5 replacement: every line from the supplied elevation is a separate
- * modular unit. Positions are kept inside a 350 x 294 cm planning envelope;
- * the 100/140/100 vertical values are stored as proportions on the tall side.
+ * Legacy Kitchen 5 reference kept for source compatibility. The active preset
+ * is replaced by KITCHEN_5_IMAGE_REFERENCE below before the presets are exported.
  */
-const KITCHEN_5_REFERENCE: KitchenLayoutPreset = {
+const KITCHEN_5_REFERENCE_LEGACY: KitchenLayoutPreset = {
   id: "kitchen-5-sketch",
   name: "Kitchen 5 · Schiță exactă",
   description:
@@ -702,9 +701,226 @@ const KITCHEN_5_REFERENCE: KitchenLayoutPreset = {
   ],
 };
 
-export const KITCHEN_LAYOUT_PRESETS = BUILT_IN_KITCHEN_LAYOUT_PRESETS.map((layout) =>
-  layout.id === KITCHEN_5_REFERENCE.id ? KITCHEN_5_REFERENCE : layout,
-);
+// Kitchen 5 placement is derived from each preceding module, not from the
+// apparent pixel positions in the isometric reference.
+const K5_A1_WIDTH = 61;
+const K5_A2_WIDTH = 75;
+const K5_A3_WIDTH = 80;
+const K5_CORNER_WIDTH = 60;
+const K5_B1_WIDTH = 80;
+const K5_B2_WIDTH = 60;
+const K5_WALL_A_X = -370;
+const K5_WALL_A_START = 324;
+const K5_A1_Z = K5_WALL_A_START + K5_A1_WIDTH / 2;
+const K5_A2_Z = K5_A1_Z + (K5_A1_WIDTH + K5_A2_WIDTH) / 2;
+const K5_A3_Z = K5_A2_Z + (K5_A2_WIDTH + K5_A3_WIDTH) / 2;
+const K5_CORNER_Z = K5_A3_Z + (K5_A3_WIDTH + K5_CORNER_WIDTH) / 2;
+const K5_WALL_B_Z = K5_CORNER_Z;
+const K5_B1_X = K5_WALL_A_X + (K5_CORNER_WIDTH + K5_B1_WIDTH) / 2;
+const K5_B2_X = K5_B1_X + (K5_B1_WIDTH + K5_B2_WIDTH) / 2;
+
+/** Kitchen 5: the requested A1-A3 + corner + B1-B2 L-shaped assembly. */
+const KITCHEN_5_IMAGE_REFERENCE: KitchenLayoutPreset = {
+  id: "kitchen-5-sketch",
+  name: "Kitchen 5 · L-shape A1–A3 + B1–B2",
+  description:
+    "Ansamblu L conectat la 90°: A1 corp înalt 610 mm, A2 sertare 750 mm, A3 cuptor + plită 800 mm, corp de colț real și B1 chiuvetă 800 mm + B2 mașină de spălat 600 mm.",
+  room: {
+    width: 800,
+    depth: 600,
+    height: 300,
+    wallThickness: 12,
+    entryWidth: 110,
+  },
+  units: [
+    {
+      name: "Corp vertical lateral · 610 mm",
+      x: K5_WALL_A_X,
+      z: K5_A1_Z,
+      rot: 90,
+      w: 61,
+      h: 220,
+      d: 60,
+      finish: "white",
+      mount: "tall",
+      front: "door",
+      frontSections: 2,
+      shelves: 0,
+      drawers: 0,
+      rail: false,
+      snap: false,
+    },
+    {
+      name: "Corp inferior cu 3 sertare · 750 mm",
+      x: K5_WALL_A_X,
+      z: K5_A2_Z,
+      rot: 90,
+      w: 75,
+      h: 80,
+      d: 60,
+      finish: "white",
+      mount: "base",
+      front: "drawers",
+      drawers: 3,
+      shelves: 0,
+      rail: false,
+      countertop: true,
+      countertopMaterial: "stone",
+      snap: false,
+    },
+    {
+      name: "Corp inferior cu plită și cuptor · 800 mm",
+      x: K5_WALL_A_X,
+      z: K5_A3_Z,
+      rot: 90,
+      w: 80,
+      h: 80,
+      d: 60,
+      finish: "white",
+      mount: "base",
+      front: "none",
+      shelves: 0,
+      drawers: 0,
+      rail: false,
+      countertop: true,
+      countertopMaterial: "stone",
+      appliances: [
+        { id: "k5-left-oven", type: "oven", y: 4 },
+        { id: "k5-left-hob", type: "hob", y: 4 },
+      ],
+      snap: false,
+    },
+    {
+      name: "Corp de colț funcțional · 600 × 600 mm",
+      x: K5_WALL_A_X,
+      z: K5_CORNER_Z,
+      w: 60,
+      h: 80,
+      d: 60,
+      finish: "white",
+      mount: "base",
+      front: "double",
+      shelves: 0,
+      drawers: 0,
+      rail: false,
+      corner: true,
+      countertop: true,
+      countertopMaterial: "stone",
+      snap: false,
+    },
+    {
+      name: "Corp suspendat deschis · polițe · 750 mm",
+      x: -382.5,
+      z: K5_A2_Z,
+      rot: 90,
+      w: 75,
+      h: 70,
+      d: 35,
+      y: 150,
+      finish: "white",
+      mount: "wall",
+      front: "none",
+      shelves: 2,
+      drawers: 0,
+      rail: false,
+      snap: false,
+    },
+    {
+      name: "Corp suspendat inferior cu uși · 750 mm",
+      x: -382.5,
+      z: K5_A2_Z,
+      rot: 90,
+      w: 75,
+      h: 70,
+      d: 35,
+      y: 80,
+      finish: "white",
+      mount: "wall",
+      front: "double",
+      shelves: 0,
+      drawers: 0,
+      rail: false,
+      snap: false,
+    },
+    {
+      name: "Corp suspendat deschis · polițe · 800 mm",
+      x: -382.5,
+      z: K5_A3_Z,
+      rot: 90,
+      w: 80,
+      h: 70,
+      d: 35,
+      y: 150,
+      finish: "white",
+      mount: "wall",
+      front: "none",
+      shelves: 2,
+      drawers: 0,
+      rail: false,
+      snap: false,
+    },
+    {
+      name: "Corp suspendat inferior cu uși · 800 mm",
+      x: -382.5,
+      z: K5_A3_Z,
+      rot: 90,
+      w: 80,
+      h: 70,
+      d: 35,
+      y: 80,
+      finish: "white",
+      mount: "wall",
+      front: "double",
+      shelves: 0,
+      drawers: 0,
+      rail: false,
+      snap: false,
+    },
+    {
+      name: "Corp inferior cu chiuvetă · 800 mm",
+      x: K5_B1_X,
+      z: K5_WALL_B_Z,
+      rot: 180,
+      w: 80,
+      h: 80,
+      d: 60,
+      finish: "white",
+      mount: "base",
+      front: "double",
+      shelves: 0,
+      drawers: 0,
+      rail: false,
+      countertop: true,
+      countertopMaterial: "stone",
+      faucet: true,
+      appliances: [{ id: "k5-right-sink", type: "sink", y: 4 }],
+      snap: false,
+    },
+    {
+      name: "Corp inferior cu mașină de spălat · 600 mm",
+      x: K5_B2_X,
+      z: K5_WALL_B_Z,
+      rot: 180,
+      w: 60,
+      h: 80,
+      d: 60,
+      finish: "white",
+      mount: "base",
+      front: "none",
+      shelves: 0,
+      drawers: 0,
+      rail: false,
+      countertop: true,
+      countertopMaterial: "stone",
+      appliances: [{ id: "k5-right-washer", type: "washer", y: 4 }],
+      snap: false,
+    },
+  ],
+};
+
+/** Kitchen 5 was retired and must not be offered as an available layout. */
+export const KITCHEN_LAYOUT_PRESETS = BUILT_IN_KITCHEN_LAYOUT_PRESETS
+  .filter((layout) => layout.id !== "kitchen-5-sketch");
 
 const KEY = "cabinet-presets";
 const KITCHEN_KEY = "kitchen-layout-presets";

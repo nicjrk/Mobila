@@ -280,6 +280,8 @@ export type Unit = {
   mount: UnitMount;
   /** When false the unit ignores magnetic snapping (free-standing island). */
   snap: boolean;
+  /** Marks the physical square cabinet that joins two perpendicular runs. */
+  corner?: boolean;
   name?: string;
   /** Positioned interior fittings. Derived from the counts above when absent. */
   fittings?: Fitting[];
@@ -355,7 +357,7 @@ export function frontSectionFractions(u: Unit): number[] {
 /** Resolve one leaf's settings, falling back to the cabinet-level values. */
 export function leafSpec(u: Unit, i: number, sectionOverride?: LeafSpec) {
   const l = { ...(u.leaves?.[String(i)] ?? {}), ...(sectionOverride ?? {}) };
-  const dbl = u.front === "double";
+  const dbl = u.front === "double" || (u.frontLeaves ?? 0) > 1;
   const baseHinge = u.hingeSide ?? ((u.handlePos ?? "right") === "left" ? "right" : "left");
   const side = l.side;
   const align = (l.align ?? u.handleAlign ?? "center") as HandleAlign;

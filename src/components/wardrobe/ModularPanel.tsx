@@ -44,7 +44,7 @@ import {
 import { APPLIANCE_TYPES } from "@/lib/wardrobe";
 import type { ApplianceType, FittingType } from "@/lib/wardrobe";
 import { CATALOG, type CatalogProduct } from "@/lib/catalog";
-import { alignToWall, nextUnitX, previousUnitX, snapUnitToRoom } from "@/lib/units";
+import { alignToWall, containUnit, nextUnitX, previousUnitX, snapUnitToRoom } from "@/lib/units";
 import type { ValidationIssue } from "@/lib/validation";
 import { buildCncCutlist, cncSettings, validateCncCutlist } from "@/lib/cnc";
 import { createDxf, dxfFileName, dxfSheetFileName } from "@/lib/dxf";
@@ -457,10 +457,11 @@ export default function ModularPanel({
   };
 
   const addKitchenModule = (
-    kind: "sink" | "hob" | "wall" | "fridge" | "dishwasher" | "drawers",
+    kind: "sink" | "hob" | "wall" | "fridge" | "dishwasher" | "drawers" | "corner",
   ) => {
     const createdId = newId();
     setConfig((c) => {
+      const isCorner = kind === "corner";
       const base = {
         finish: c.finish,
         w: 60,
@@ -470,8 +471,14 @@ export default function ModularPanel({
         countertop: kind !== "wall" && kind !== "fridge",
         countertopMaterial: "stone" as const,
         faucet: kind === "sink",
-        front: kind === "drawers" ? ("drawers" as const) : ("door" as const),
+        front:
+          kind === "drawers"
+            ? ("drawers" as const)
+            : isCorner
+              ? ("double" as const)
+              : ("door" as const),
         drawers: kind === "drawers" ? 3 : 0,
+        ...(isCorner ? { corner: true, snap: false } : {}),
         appliances:
           kind === "sink"
             ? [{ id: newId(), type: "sink" as const, y: 4 }]
@@ -489,8 +496,8 @@ export default function ModularPanel({
       const unit = newUnit({
         ...base,
         id: createdId,
-        x: nextUnitX(c.units, base.w),
-        z: c.units[0]?.z ?? 0,
+        x: isCorner ? 0 : nextUnitX(c.units, base.w),
+        z: isCorner ? 30 : (c.units[0]?.z ?? 0),
       });
       return { ...c, units: [...c.units, snapUnitToRoom(unit, c.units, c.modularRoom)] };
     });
@@ -514,6 +521,9 @@ export default function ModularPanel({
   ) => {
     let firstId = "";
     setConfig((c) => {
+      const room =
+        mode === "replace" && layout.room ? { ...c.modularRoom, ...layout.room } : c.modularRoom;
+      const isSequentialKitchen = layout.id === "kitchen-5-sketch";
       const created = layout.units.map((item, index) => {
         const unit = newUnit({
           finish: c.finish,
@@ -524,16 +534,21 @@ export default function ModularPanel({
             : {}),
         });
         if (index === 0) firstId = unit.id;
-        return unit;
+        // Kitchen 5 is authored in sequential wall coordinates. Contain it
+        // without collision resolution so a bad relationship cannot be
+        // silently moved to a different place.
+        return isSequentialKitchen ? containUnit(unit, room) : unit;
       });
-      const room =
-        mode === "replace" && layout.room ? { ...c.modularRoom, ...layout.room } : c.modularRoom;
       return {
         ...c,
         ...(mode === "replace" && layout.room ? { modularRoom: room } : {}),
-        units: created.reduce((all, unit) => [...all, snapUnitToRoom(unit, all, room)], [
-          ...(mode === "append" ? c.units : []),
-        ] as Unit[]),
+        units: created.reduce(
+          (all, unit) => [
+            ...all,
+            isSequentialKitchen ? unit : snapUnitToRoom(unit, all, room),
+          ],
+          [...(mode === "append" ? c.units : [])] as Unit[],
+        ),
       };
     });
     setSelectedId(firstId);
@@ -840,6 +855,7 @@ export default function ModularPanel({
                     ["dishwasher", "Dishwasher base"],
                     ["wall", "Wall cabinet"],
                     ["fridge", "Fridge tower"],
+                    ["corner", "Corner base L · 600 × 600"],
                   ] as const
                 ).map(([kind, label]) => (
                   <button

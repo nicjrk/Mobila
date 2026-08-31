@@ -367,29 +367,64 @@ describe("modular planner core rules", () => {
     expect(cutlist.parts.every((item) => item.cabinet === "Tall fridge housing")).toBe(true);
   });
 
-  it("replaces Kitchen 5 with the separated sketch modules", () => {
+  it("replaces Kitchen 5 with the new L-shaped sketch modules", () => {
     const layout = KITCHEN_LAYOUT_PRESETS.find((item) => item.id === "kitchen-5-sketch");
     expect(layout).toBeDefined();
     const units = layout!.units;
+    expect(units).toHaveLength(15);
     expect(units.filter((unit) => unit.w === 61).length).toBe(1);
     expect(units.filter((unit) => unit.w === 75).length).toBe(3);
     expect(units.filter((unit) => unit.w === 80).length).toBe(4);
-    expect(units.filter((unit) => unit.w === 90).length).toBe(2);
     expect(units.filter((unit) => unit.w === 60).length).toBe(3);
+    expect(units.filter((unit) => unit.w === 90).length).toBe(2);
+    expect(units.filter((unit) => unit.w === 40).length).toBe(1);
+    expect(units.filter((unit) => unit.w === 125).length).toBe(1);
+    expect(units.find((unit) => unit.w === 61)?.frontSections).toBe(2);
+    const corner = units.find((unit) => unit.corner);
+    expect(corner).toMatchObject({ w: 60, d: 60, h: 80, x: -370, z: 570, countertop: true });
     const threeDoor = units.find((unit) => unit.frontLeaves === 3);
     expect(threeDoor?.w).toBe(125);
+    expect(threeDoor?.rot).toBe(180);
     expect(leafCount(newUnit(threeDoor ?? {}))).toBe(3);
-    expect(frontSectionFractions(newUnit(units[0] ?? {}))).toEqual([
-      100 / 340,
-      140 / 340,
-      100 / 340,
-    ]);
-    expect(units.find((unit) => unit.name?.includes("mașină de spălat"))?.appliances).toEqual([
-      expect.objectContaining({ type: "washer" }),
-    ]);
-    expect(units.find((unit) => unit.name?.toLowerCase().includes("corp l"))?.name).toContain(
-      "CORP L",
+    expect(layout?.room).toMatchObject({ width: 800, depth: 600, height: 300 });
+    expect(units.some((unit) => unit.name?.toLowerCase().includes("corp l"))).toBe(false);
+    const room = { ...DEFAULT_MODULAR_ROOM, ...layout!.room };
+    const placed = units.reduce(
+      (all, item, index) => [
+        ...all,
+        snapUnitToRoom(newUnit({ ...item, id: `k5-${index}` }), all, room),
+      ],
+      [] as ReturnType<typeof newUnit>[],
     );
+    expect(placed.find((unit) => unit.corner)).toMatchObject({ x: -370, z: 570 });
+    expect(placed.find((unit) => unit.w === 80 && unit.z === 500)).toMatchObject({
+      x: -370,
+      z: 500,
+      rot: 90,
+    });
+    expect(
+      placed.find((unit) => unit.appliances?.some((appliance) => appliance.type === "sink")),
+    ).toMatchObject({
+      x: -300,
+      z: 570,
+      rot: 180,
+    });
+    expect(
+      frontSectionFractions(newUnit({ frontSections: 3, frontSectionRatios: [100, 140, 100] })),
+    ).toEqual([100 / 340, 140 / 340, 100 / 340]);
+    expect(
+      units.find((unit) => unit.appliances?.some((appliance) => appliance.type === "washer"))
+        ?.appliances,
+    ).toEqual([expect.objectContaining({ type: "washer" })]);
+    expect(
+      units.find((unit) => unit.appliances?.some((appliance) => appliance.type === "sink")),
+    ).toBeDefined();
+    expect(
+      units
+        .flatMap((unit) => unit.appliances ?? [])
+        .filter((appliance) => appliance.type === "oven"),
+    ).toHaveLength(3);
+    expect(units.filter((unit) => unit.mount === "wall")).toHaveLength(8);
   });
 
   it("keeps the Aspire manifest traceable to a plate, cabinet and part", () => {
